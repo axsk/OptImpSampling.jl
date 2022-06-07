@@ -20,7 +20,7 @@ doublewell(x) = ((x[1])^2 - 1) ^ 2
 dynamics(;sigma=[1.], potential=doublewell, T=.1) = (;sigma, potential, T)
 
 function sdeproblem(dynamics=dynamics(), x0=[0.])
-    f(x,p,t) = - grad(dynamics.potential, x)  # find a way to use grads w/o [1]
+    f(x,p,t) = - grad(dynamics.potential, x)
     g(x,p,t) = dynamics.sigma
     prob = SDEProblem(f, g, x0, (0., dynamics.T))
 end
@@ -30,15 +30,14 @@ function controlled_drift(xg, p, t)
     x = @view xg[1:end-1]
     u = (-σ' * grad(k, x) / k(x)) :: Vector
     dV = (-Flux.gradient(U, x)[1]) :: Vector
-
     return [dV + u; sum(abs2, u) / 2] :: Vector
 end
 
 function controlled_noise(xg, p, t)
     (;σ, k, Σ, n) = p
     x = @view xg[1:end-1]
-    Σ[n+1, 1:n] .= (-σ' * collect(Flux.gradient(k, x)[1]) / k(x)) :: Vector
-    return Σ
+    Σ[n+1, 1:n] .= (-σ' * grad(k, x) / k(x)) :: Vector
+    return Σ :: Matrix
 end
 
 function controlled_parameters(σ, k, U)
@@ -64,7 +63,7 @@ function optexp(f)
     p = controlled_problem(k=k)
     s = solve(p)
     plot(s) |> display
-    f(s[end][1]) * exp(-s[end][2]) - 1
+    f(s[end][1]) * exp(-s[end][2]) - 1 # this should be 0 variance for K[f]
 end
 
 ### COMPUTATION OF eigenfunction
