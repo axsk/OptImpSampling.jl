@@ -27,41 +27,7 @@ grad(f, x) = ForwardDiff.gradient(f, x)
 
 doublewell(x) = ((x[1])^2 - 1) ^ 2
 
-dynamics(;sigma=[1.], potential=doublewell, T=.1) = (;sigma, potential, T)
 
-function sdeproblem(dynamics=dynamics(), x0=[0.])
-    f(x,p,t) = - grad(dynamics.potential, x)
-    g(x,p,t) = dynamics.sigma
-    prob = SDEProblem(f, g, x0, (0., dynamics.T))
-end
-
-u_star(x, k, σ) = (σ' * grad(k, x) / k(x)) :: Vector
-u_star(x, k, σ) = (σ' * grad(k, x) / k(x)) :: Vector
-
-function controlled_drift(xg, p, t)
-    (;σ, k, U, u) = p
-    x = @view xg[1:end-1]
-    uu = u(x)
-    du = [-grad(U, x) + uu; sum(abs2, uu) / 2]
-
-    return du
-end
-
-function controlled_noise(xg, p, t)
-    (;σ, k, Σ, n, u) = p
-    x = @view xg[1:end-1]
-    Σ[n+1, 1:n] .= u(x)
-    return Σ :: Matrix
-end
-
-function controlled_parameters(σ, k, U)
-    n = size(σ,1)
-    σ = reshape(σ, n, n)
-    Σ = zeros(n+1, n+1)
-    Σ[1:n, 1:n] = σ
-    u = x -> u_star(x, k, σ)
-    return (; n, σ, Σ, k, U, u)
-end
 
 struct ProblemOptChi{P, C}
     potential::P
@@ -117,50 +83,6 @@ function evaluate(p::ProblemOptChi, x0)
 end
 
 
-controlled_problem(; σ=[1], U=doublewell, k=k1, x0 = [0.], T = 1) = controlled_problem(σ, U, k, x0, T)
-
-function controlled_problem(σ, U, k, x0, T)
-    p = controlled_parameters(σ, k, U)
-    SDEProblem(controlled_drift, controlled_noise, [x0; 0], (0., T), p, noise_rate_prototype = ones(p.n+1, p.n+1))
-end
-
-# leads to zero control
-k1(x) = 0 * sum(x) + 1 # positive for division, 0 mult for zygote to not return nothing
-
-function optexp(f)
-    k(x) = f(x[1]) + 1 # shifted eigenfunction
-    p = controlled_problem(k=k)
-    s = solve(p)
-    plot(s) |> display
-
-    k(s[end][1]) * exp(-s[end][2]) - 1 # this should be 0 variance for K[f]
-    k, p, s
-end
-
-function compare(nef = 1000, nsol = 10000)
-    T, f = eigenfunction(-2:.1:2, 2000) # compute the eigenfunction
-    k(x) =  f(x[1]) + 1 # shifted eigenfunction
-    #k(x) = f(x[1]) - minimum(f.(-3:3)) + 0.1
-    p0 = controlled_problem(ones(1,1), doublewell, x->1, 0., 1.)
-    pu = controlled_problem(ones(1,1), doublewell, k, 0., 1.)
-    sol0=[solve(p0) for i in 1:10000]
-    solu=[solve(pu) for i in 1:10000]
-
-    map([solu, sol0]) do sol
-        ex = eval_girsanov.(sol, k)
-       @show mean_and_std(ex)
-       histogram(ex)|>display
-    end
-    sol0, solu, f
-end
-
-
-
-
-eval_girsanov(s::DifferentialEquations.RODESolution, k) = eval_girsanov(s[end][1], s[end][2], k)
-
-eval_girsanov(x, g, k) = k(x) * exp(-g)
-
 ### COMPUTATION OF eigenfunction
 
 function gridcell(grid, x)
@@ -205,8 +127,45 @@ function eigenfunction(grid=-2:.2:2, n=100, dynamics=dynamics())
     T, f, v, val
 end
 
+#= legacy code
 
 ### Statistics
+
+dynamics(;sigma=[1.], potential=doublewell, T=.1) = (;sigma, potential, T)
+
+function sdeproblem(dynamics=dynamics(), x0=[0.])
+    f(x,p,t) = - grad(dynamics.potential, x)
+    g(x,p,t) = dynamics.sigma
+    prob = SDEProblem(f, g, x0, (0., dynamics.T))
+end
+
+u_star(x, k, σ) = (σ' * grad(k, x) / k(x)) :: Vector
+u_star(x, k, σ) = (σ' * grad(k, x) / k(x)) :: Vector
+
+function controlled_drift(xg, p, t)
+    (;σ, k, U, u) = p
+    x = @view xg[1:end-1]
+    uu = u(x)
+    du = [-grad(U, x) + uu; sum(abs2, uu) / 2]
+
+    return du
+end
+
+function controlled_noise(xg, p, t)
+    (;σ, k, Σ, n, u) = p
+    x = @view xg[1:end-1]
+    Σ[n+1, 1:n] .= u(x)
+    return Σ :: Matrix
+end
+
+function controlled_parameters(σ, k, U)
+    n = size(σ,1)
+    σ = reshape(σ, n, n)
+    Σ = zeros(n+1, n+1)
+    Σ[1:n, 1:n] = σ
+    u = x -> u_star(x, k, σ)
+    return (; n, σ, Σ, k, U, u)
+end
 
 using StatsBase
 function expectation(f, x0, dynamics, n)
@@ -216,3 +175,50 @@ function expectation(f, x0, dynamics, n)
     k, v = mean_and_var(ks)
     return k, v
 end
+
+
+controlled_problem(; σ=[1], U=doublewell, k=k1, x0 = [0.], T = 1) = controlled_problem(σ, U, k, x0, T)
+
+function controlled_problem(σ, U, k, x0, T)
+    p = controlled_parameters(σ, k, U)
+    SDEProblem(controlled_drift, controlled_noise, [x0; 0], (0., T), p, noise_rate_prototype = ones(p.n+1, p.n+1))
+end
+
+# leads to zero control
+k1(x) = 0 * sum(x) + 1 # positive for division, 0 mult for zygote to not return nothing
+
+function optexp(f)
+    k(x) = f(x[1]) + 1 # shifted eigenfunction
+    p = controlled_problem(k=k)
+    s = solve(p)
+    plot(s) |> display
+
+    k(s[end][1]) * exp(-s[end][2]) - 1 # this should be 0 variance for K[f]
+    k, p, s
+end
+
+function compare(nef = 1000, nsol = 10000)
+    T, f = eigenfunction(-2:.1:2, 2000) # compute the eigenfunction
+    k(x) =  f(x[1]) + 1 # shifted eigenfunction
+    #k(x) = f(x[1]) - minimum(f.(-3:3)) + 0.1
+    p0 = controlled_problem(ones(1,1), doublewell, x->1, 0., 1.)
+    pu = controlled_problem(ones(1,1), doublewell, k, 0., 1.)
+    sol0=[solve(p0) for i in 1:10000]
+    solu=[solve(pu) for i in 1:10000]
+
+    map([solu, sol0]) do sol
+        ex = eval_girsanov.(sol, k)
+       @show mean_and_std(ex)
+       histogram(ex)|>display
+    end
+    sol0, solu, f
+end
+
+
+
+
+eval_girsanov(s::DifferentialEquations.RODESolution, k) = eval_girsanov(s[end][1], s[end][2], k)
+
+eval_girsanov(x, g, k) = k(x) * exp(-g)
+
+=#
