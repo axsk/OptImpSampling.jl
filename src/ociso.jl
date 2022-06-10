@@ -36,6 +36,7 @@ function sdeproblem(dynamics=dynamics(), x0=[0.])
 end
 
 u_star(x, k, σ) = (σ' * grad(k, x) / k(x)) :: Vector
+u_star(x, k, σ) = (σ' * grad(k, x) / k(x)) :: Vector
 
 function controlled_drift(xg, p, t)
     (;σ, k, U, u) = p
@@ -62,14 +63,59 @@ function controlled_parameters(σ, k, U)
     return (; n, σ, Σ, k, U, u)
 end
 
-struct ControlledProblem
-    potential
-    sigma
-    T
-    k
-    u
-    Σ
+struct ProblemOptChi{P, C}
+    potential::P
+    T::Float64 # lag-time
+    σ::Matrix{Float64} # noise
+    Σ::Matrix{Float64} # augmented noise
+    chi::C # chi function
+    q::Float64 # rate of eigenfunction
+    sl::Float64 # scale * lowerbound(shift)
 end
+
+ProblemOptChi(chi, q, sl) = ProblemOptChi(doublewell, 1., ones(1,1), ones(2,2), chi, q, sl)
+
+function ProblemOptChi()
+    T, f, v, val = eigenfunction()
+    sl = - minimum(v)
+    chi(x) = f(x[1]) + sl
+    q = -log(real(val))
+    ProblemOptChi(chi, q, sl)
+end
+
+function u_star(x, t, T, σ, chi, q, sl)
+    λ = exp(-q * (T-t))
+    u = σ' * grad(chi, x) / (chi(x) + sl / λ)
+    return u
+end
+
+u_star(x, p::ProblemOptChi, t) = u_star(x, t, p.T, p.σ, p.chi, p.q, p.sl)
+
+function controlled_drift(xg, p::ProblemOptChi, t)
+    x = @view xg[1:end-1]
+    u = u_star(x, p, t)
+    du = [-grad(p.potential, x) + u; sum(abs2, u) / 2]
+    return du
+end
+
+function controlled_noise(xg, p::ProblemOptChi, t)
+    x = @view xg[1:end-1]
+    n = length(x)
+    p.Σ[n+1, 1:n] .= u_star(x, p, t)
+    return p.Σ :: Matrix
+end
+
+function SDEProblem(p::ProblemOptChi, x0)
+    SDEProblem(controlled_drift, controlled_noise, [x0; 0.], (0., p.T), p, noise_rate_prototype = p.Σ)
+end
+
+function evaluate(p::ProblemOptChi, x0)
+    sde = SDEProblem(p, x0)
+    s = solve(sde)
+    e = p.chi(s[end][1]) * exp(-s[end][2]) - p.sl
+    return e
+end
+
 
 controlled_problem(; σ=[1], U=doublewell, k=k1, x0 = [0.], T = 1) = controlled_problem(σ, U, k, x0, T)
 
