@@ -26,9 +26,6 @@ using Parameters
 grad(f, x) = ForwardDiff.gradient(f, x)
 
 doublewell(x) = ((x[1])^2 - 1) ^ 2
-
-
-
 struct ProblemOptChi{P, C}
     potential::P
     T::Float64 # lag-time
@@ -39,7 +36,7 @@ struct ProblemOptChi{P, C}
     sl::Float64 # scale * lowerbound(shift)
 end
 
-ProblemOptChi(chi, q, sl) = ProblemOptChi(doublewell, 1., ones(1,1), ones(2,2), chi, q, sl)
+ProblemOptChi(chi, q, sl) = ProblemOptChi(doublewell, 1., ones(1,1), collect(Diagonal([1.,0])), chi, q, sl)
 
 function ProblemOptChi()
     T, f, v, val = eigenfunction()
@@ -55,25 +52,25 @@ function u_star(x, t, T, σ, chi, q, sl)
     return u
 end
 
-u_star(x, p::ProblemOptChi, t) = u_star(x, t, p.T, p.σ, p.chi, p.q, p.sl)
+u_star(x::AbstractVector, p::ProblemOptChi, t) = u_star(x, t, p.T, p.σ, p.chi, p.q, p.sl)
 
-function controlled_drift(xg, p::ProblemOptChi, t)
+function controlled_drift(du, xg, p::ProblemOptChi, t)
     x = @view xg[1:end-1]
     u = u_star(x, p, t)
-    du = [-grad(p.potential, x) + u; sum(abs2, u) / 2]
-    return du
+    du[1:end-1] = -grad(p.potential, x) + p.σ * u
+    du[end] = sum(abs2, u) / 2
+    du
 end
 
-function controlled_noise(xg, p::ProblemOptChi, t)
+function controlled_noise(dg, xg, p::ProblemOptChi, t)
     x = @view xg[1:end-1]
-    n = length(x)
-    p.Σ[n+1, 1:n] .= u_star(x, p, t)
-    return p.Σ :: Matrix
+    dg .= 0  # maybe unnecessary
+    dg[1:end-1, 1:end-1] .= p.σ
+    dg[end, 1:end-1] .= u_star(x, p, t)
 end
 
-function SDEProblem(p::ProblemOptChi, x0)
-    SDEProblem(controlled_drift, controlled_noise, [x0; 0.], (0., p.T), p, noise_rate_prototype = p.Σ)
-end
+SDEProblem(p::ProblemOptChi, x0) = SDEProblem(
+    controlled_drift, controlled_noise, [x0; 0.], (0., p.T), p, noise_rate_prototype = p.Σ)
 
 function evaluate(p::ProblemOptChi, x0)
     sde = SDEProblem(p, x0)
@@ -127,10 +124,6 @@ function eigenfunction(grid=-2:.2:2, n=100, dynamics=dynamics())
     T, f, v, val
 end
 
-#= legacy code
-
-### Statistics
-
 dynamics(;sigma=[1.], potential=doublewell, T=.1) = (;sigma, potential, T)
 
 function sdeproblem(dynamics=dynamics(), x0=[0.])
@@ -138,6 +131,10 @@ function sdeproblem(dynamics=dynamics(), x0=[0.])
     g(x,p,t) = dynamics.sigma
     prob = SDEProblem(f, g, x0, (0., dynamics.T))
 end
+
+#= legacy code
+
+### Statistics
 
 u_star(x, k, σ) = (σ' * grad(k, x) / k(x)) :: Vector
 u_star(x, k, σ) = (σ' * grad(k, x) / k(x)) :: Vector
