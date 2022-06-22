@@ -1,17 +1,6 @@
 # optimal control for the isokann sampling problem
-# we could start with fin elems / linear interp. of the eigenfunction
+# we start with fin elems / linear interp. of the eigenfunction
 # and testing optimal sampling under the new criterion
-
-# then progress to chi functions
-# then replace fin elems by NN
-
-# we need
-# - a trajectory sampler + girsanov
-# - the eigenfunction (test this before isokann convergence)
-
-# what we learned
-# - need to adjust for time scaling of non-eigenfunction k
-# - T eigenfunctions are hard, use SQRA
 
 
 #using Flux
@@ -35,7 +24,7 @@ grad(f, x) = ForwardDiff.gradient(f, x)
 doublewell(x) = ((x[1])^2 - 1) ^ 2
 
 abstract type ProblemOptControl end
-struct ProblemOptChi{P, C}
+struct ProblemOptChi{P, C} <: ProblemOptControl
     potential::P
     T::Float64 # lag-time
     σ::Matrix{Float64} # noise
@@ -44,8 +33,8 @@ struct ProblemOptChi{P, C}
     q::Float64 # rate of eigenfunction
     b::Float64 # scale * lowerbound(shift)
 end
-#=
-struct ProblemOptChiCached{P, C}
+
+struct ProblemOptChiCached5{P, C, C1, C2} <: ProblemOptControl
     potential::P
     T::Float64 # lag-time
     σ::Matrix{Float64} # noise
@@ -53,18 +42,11 @@ struct ProblemOptChiCached{P, C}
     chi::C # chi function
     q::Float64 # rate of eigenfunction
     b::Float64 # scale * lowerbound(shift)
-    dU
-    df
+    dU::C1
+    df::C2
 end
 
 ProblemOptChi(chi, q, b) = ProblemOptChi(doublewell, 1., ones(1,1), collect(Diagonal([1.,0])), chi, q, b)
-function ProblemOptChiC(chi, q, b)
-
-    x = [1.]
-    cdU = ForwardDiff.GradientConfig()
-
-    ProblemOptChi(doublewell, 1., ones(1,1), collect(Diagonal([1.,0])), chi, q, b)
-end =#
 
 function plot_grad_and_u(p, grid=-2:.05:2)
     plot(grid, x->grad(p.chi, [x])[1], label="grad")
@@ -89,66 +71,50 @@ end
 
 global linforce :: Float64 = 1.
 
-control(p::ProblemOptChi, x::AbstractVector, t) = control(x, t, p.T, p.σ, p.chi, p.q, p.b)
+control(p::ProblemOptControl, x::AbstractVector, t) = control(x, t, p.T, p.σ, p.chi, p.q, p.b)
 
 function control(x, t, T, σ, chi, q, b)
     @assert q<0
     λ = exp(q * (T-t))
     u = σ' * grad(chi, x)
     u /= (chi(x) - b + b / λ)  # this is a weird way to write this
-    return linforce*u
+    return linforce*u :: Vector{Float64}
 end
 
-
-function controlled_drift(du, xg, p::ProblemOptChi, t)
-    @show "d", xg
+function controlled_drift(du, xg::Vector{Float64}, p::ProblemOptControl, t)
     x = @view xg[1:end-1]
     u = control(p, x, t)
-    du[1:end-1] = -grad(p.potential, x) + p.σ * u  # eq. (5)
+    du[1:end-1] = - grad(p.potential, x)
+    du[1:end-1] += p.σ * u  # eq. (5)
     du[end] = sum(abs2, u) / 2  # eq. (19)
-    du
 end
 
-#=
-function controlled_drift_cached(x)
-    cfg = ForwardDiff.GradientConfig(p.potential, x)
-    function f(du, xg, p, t)
-        x = @view xg[1:end-1]
-        u = control(p, x, t)
-        du[1:end-1] = -ForwardDiff.gradient(p.potential, x, cfg) + p.σ * u  # eq. (5)
-        du[end] = sum(abs2, u) / 2  # eq. (19)
-    end
-    return f
-end
-=#
-
-function controlled_noise(dg, xg, p::ProblemOptChi, t)
-    @show "n", xg
+function controlled_noise(dg, xg, p::ProblemOptControl, t)
     x = @view xg[1:end-1]
     dg .= 0  # maybe unnecessary
     dg[1:end-1, 1:end-1] .= p.σ  # eq. (5)
     dg[end, 1:end-1] .= control(p, x, t)  # eq. (19)
 end
 
-SDEProblem(p::ProblemOptChi, x0) = StochasticDiffEq.SDEProblem(
-    controlled_drift, controlled_noise, [x0; 0.], (0., p.T), p, noise_rate_prototype = p.Σ)
+function SDEProblem(p::ProblemOptControl, x0)
+    StochasticDiffEq.SDEProblem(controlled_drift, controlled_noise,
+        [x0; 0.], (0., p.T), p, noise_rate_prototype = p.Σ)
+end
 
+solve(p::ProblemOptControl, x0; showplot=false, solver=SROCK2(), dt=.01) = solve(SDEProblem(p, x0), solver, dt=dt)
 
-
-solve(p::ProblemOptChi, x0; showplot=false, solver=SROCK2(), dt=.01) = solve(SDEProblem(p, x0), solver, dt=dt)
-
-function plot(p::ProblemOptChi, sol)
+function plot(p::ProblemOptControl, sol)
     plot(sol, label = ["X_t" "G"])
     plot!(sol.t, control(p, sol), label = "u") |> display
 end
 
-function evaluate(p::ProblemOptChi, x0)
+function evaluate(p::ProblemOptControl, x0)
     s = solve(p, x0)
     e = p.chi(s[end][1]) * exp(-s[end][2]) - p.b
     return e
 end
 
-function control(p::ProblemOptChi, sol::SciMLBase.AbstractODESolution)
+function control(p::ProblemOptControl, sol::SciMLBase.AbstractODESolution)
     us = []
     for (t,u) in zip(sol.t, sol.u)
         u = control(p, u[1:end-1], t)
@@ -157,9 +123,23 @@ function control(p::ProblemOptChi, sol::SciMLBase.AbstractODESolution)
     return us
 end
 
-mean_and_std(p::ProblemOptChi, x0, n) = mean_and_std([evaluate(p, x0) for i in 1:n])
+mean_and_std(p::ProblemOptControl, x0, n) = mean_and_std([evaluate(p, x0) for i in 1:n])
 
-### COMPUTATION OF eigenfunction
+using Sqra
+
+function eigenfunction_sqra(; grid=-2:.2:2, potential=doublewell, sigma=1)
+    beta = 2 / sigma^2  # Einstein relation
+    u = map(potential, grid)
+    u = reshape(u, length(grid), 1)
+    Q = Sqra.sqra(u, beta) * (1/step(grid))^2 / beta
+    e = eigen(collect(Q), sortby=x->-real(x))
+    vec = e.vectors[:,2]
+    val = e.values[2]
+    int = CubicSplineInterpolation(grid, vec, extrapolation_bc=Flat())
+    return int, vec, val
+end
+
+### DEPRECATED: computation of eigenfunction by ulam (sqra is faster)
 
 function gridcell(grid, x)
     for i in 1:length(grid)-1
@@ -216,18 +196,4 @@ function sdeproblem(dynamics=dynamics(), x0=[0.])
     f(x,p,t) = - grad(dynamics.potential, x)
     g(x,p,t) = dynamics.sigma
     prob = StochasticDiffEq.SDEProblem(f, g, x0, (0., dynamics.T))
-end
-
-using Sqra
-
-function eigenfunction_sqra(; grid=-2:.2:2, potential=doublewell, sigma=1)
-    beta = 2 / sigma^2  # Einstein relation
-    u = map(potential, grid)
-    u = reshape(u, length(grid), 1)
-    Q = Sqra.sqra(u, beta) * (1/step(grid))^2 / beta
-    e = eigen(collect(Q), sortby=x->-real(x))
-    vec = e.vectors[:,2]
-    val = e.values[2]
-    int = CubicSplineInterpolation(grid, vec, extrapolation_bc=Flat())
-    return int, vec, val
 end
