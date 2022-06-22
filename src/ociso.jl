@@ -15,56 +15,39 @@ using Parameters
 import Plots: plot
 import DifferentialEquations.solve
 import StatsBase.mean_and_std
-
+using Parameters
+using Zygote
 
 #grad(f, x) = collect(Flux.gradient(f, x)[1])
-
 grad(f, x) = ForwardDiff.gradient(f, x)
+#grad(f,x) = Zygote.gradient(f, x)[1]
+
 
 doublewell(x) = ((x[1])^2 - 1) ^ 2
 
 abstract type ProblemOptControl end
-struct ProblemOptChi{P, C} <: ProblemOptControl
-    potential::P
-    T::Float64 # lag-time
-    σ::Matrix{Float64} # noise
-    Σ::Matrix{Float64} # augmented noise
-    chi::C # chi function
-    q::Float64 # rate of eigenfunction
-    b::Float64 # scale * lowerbound(shift)
+@with_kw mutable struct ProblemOptChi4{P, C} <: ProblemOptControl
+    potential::P            = doublewell
+    T::Float64              = 1              # lag-time
+    σ::Matrix{Float64}      = ones(1,1)      # noise
+    Σ::Matrix{Float64}      = zeros(2,2)     # augmented noise
+    chi::C                                   # chi function
+    q::Float64                               # rate of eigenfunction
+    b::Float64                               # scale * lowerbound(shift)
+    dt::Float64             = 0.01
+    forcing::Float64        = 1.
 end
 
-struct ProblemOptChiCached5{P, C, C1, C2} <: ProblemOptControl
-    potential::P
-    T::Float64 # lag-time
-    σ::Matrix{Float64} # noise
-    Σ::Matrix{Float64} # augmented noise
-    chi::C # chi function
-    q::Float64 # rate of eigenfunction
-    b::Float64 # scale * lowerbound(shift)
-    dU::C1
-    df::C2
-end
-
-ProblemOptChi(chi, q, b) = ProblemOptChi(doublewell, 1., ones(1,1), collect(Diagonal([1.,0])), chi, q, b)
+ProblemOptChi(chi, q, b) = ProblemOptChi4(doublewell, 1., ones(1,1), collect(Diagonal([1.,0])), chi, q, b, 0.01, 1.)
 
 function plot_grad_and_u(p, grid=-2:.05:2)
     plot(grid, x->grad(p.chi, [x])[1], label="grad")
     plot!(grid, x->control(p, [x],0)[1], label ="u*")
 end
 
-function ProblemOptChi(; n=300)
-    f, v, q= eigenfunction(n=n)
-    b = -minimum(v) + .1
-    #b = 1.
-    chi(x) = f(x[1]) + b
-    ProblemOptChi(chi, q, b)
-end
-
-function ProblemOptChiSqra(;grid=-2:.2:2)
+function ProblemOptChi(;step=0.1, grid=-2:step:2)
     f, v, q = eigenfunction_sqra(grid=grid)
     b = -minimum(v) + .1
-    #b = 1.
     chi(x) = f(x[1]) + b
     ProblemOptChi(chi, q, b)
 end
@@ -101,7 +84,9 @@ function SDEProblem(p::ProblemOptControl, x0)
         [x0; 0.], (0., p.T), p, noise_rate_prototype = p.Σ)
 end
 
-solve(p::ProblemOptControl, x0; showplot=false, solver=SROCK2(), dt=.01) = solve(SDEProblem(p, x0), solver, dt=dt)
+solve(p::ProblemOptControl, x0; showplot=false, solver=SROCK2(), dt=p.dt) = solve(SDEProblem(p, x0), solver, dt=dt)
+
+## Utility functions
 
 function plot(p::ProblemOptControl, sol)
     plot(sol, label = ["X_t" "G"])
@@ -125,6 +110,13 @@ end
 
 mean_and_std(p::ProblemOptControl, x0, n) = mean_and_std([evaluate(p, x0) for i in 1:n])
 
+function test()
+    p = ProblemOptChiSqra()
+    mean_and_std(p, 0., 100)
+end
+
+## Eigenfunction via SQRA
+
 using Sqra
 
 function eigenfunction_sqra(; grid=-2:.2:2, potential=doublewell, sigma=1)
@@ -140,6 +132,13 @@ function eigenfunction_sqra(; grid=-2:.2:2, potential=doublewell, sigma=1)
 end
 
 ### DEPRECATED: computation of eigenfunction by ulam (sqra is faster)
+
+function ProblemOptChiUlam(; n=300)
+    f, v, q= eigenfunction(n=n)
+    b = -minimum(v) + .1
+    chi(x) = f(x[1]) + b
+    ProblemOptChi(chi, q, b)
+end
 
 function gridcell(grid, x)
     for i in 1:length(grid)-1
