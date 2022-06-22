@@ -13,19 +13,28 @@
 # - need to adjust for time scaling of non-eigenfunction k
 # - T eigenfunctions are hard, use SQRA
 
-using Flux
+
+#using Flux
 using DifferentialEquations
+#using StochasticDiffEq
 using Interpolations
 using LinearAlgebra
 using Plots
 using ForwardDiff
 using Parameters
 
+import Plots: plot
+import DifferentialEquations.solve
+import StatsBase.mean_and_std
+
+
 #grad(f, x) = collect(Flux.gradient(f, x)[1])
 
 grad(f, x) = ForwardDiff.gradient(f, x)
 
 doublewell(x) = ((x[1])^2 - 1) ^ 2
+
+abstract type ProblemOptControl end
 struct ProblemOptChi{P, C}
     potential::P
     T::Float64 # lag-time
@@ -33,52 +42,87 @@ struct ProblemOptChi{P, C}
     Σ::Matrix{Float64} # augmented noise
     chi::C # chi function
     q::Float64 # rate of eigenfunction
-    sl::Float64 # scale * lowerbound(shift)
+    b::Float64 # scale * lowerbound(shift)
 end
 
-ProblemOptChi(chi, q, sl) = ProblemOptChi(doublewell, 1., ones(1,1), collect(Diagonal([1.,0])), chi, q, sl)
+ProblemOptChi(chi, q, b) = ProblemOptChi(doublewell, 1., ones(1,1), collect(Diagonal([1.,0])), chi, q, b)
 
-function ProblemOptChi()
-    T, f, v, val = eigenfunction()
-    sl = - minimum(v)
-    chi(x) = f(x[1]) + sl
-    q = -log(real(val))
-    ProblemOptChi(chi, q, sl)
+function plot_grad_and_u(p, grid=-2:.05:2)
+    plot(grid, x->grad(p.chi, [x])[1], label="grad")
+    plot!(grid, x->control(p, [x],0)[1], label ="u*")
 end
 
-function u_star(x, t, T, σ, chi, q, sl)
-    λ = exp(-q * (T-t))
-    u = σ' * grad(chi, x) / (chi(x) + sl / λ)
-    return u
+function ProblemOptChi(; n=300)
+    f, v, q= eigenfunction(n=n)
+    b = -minimum(v) + .1
+    #b = 1.
+    chi(x) = f(x[1]) + b
+    ProblemOptChi(chi, q, b)
 end
 
-u_star(x::AbstractVector, p::ProblemOptChi, t) = u_star(x, t, p.T, p.σ, p.chi, p.q, p.sl)
+function ProblemOptChiSqra()
+    f, v, q = eigenfunction_sqra()
+    b = -minimum(v) + .1
+    #b = 1.
+    chi(x) = f(x[1]) + b
+    ProblemOptChi(chi, q, b)
+end
+
+global linforce = 1.
+
+control(p::ProblemOptChi, x::AbstractVector, t) = control(x, t, p.T, p.σ, p.chi, p.q, p.b)
+
+function control(x, t, T, σ, chi, q, b)
+    @assert q<0
+    λ = exp(q * (T-t))
+    u = σ' * grad(chi, x) / (chi(x) - b + b / λ)  # this is a weird way to write this
+    return linforce*u
+end
+
 
 function controlled_drift(du, xg, p::ProblemOptChi, t)
     x = @view xg[1:end-1]
-    u = u_star(x, p, t)
-    du[1:end-1] = -grad(p.potential, x) + p.σ * u
-    du[end] = sum(abs2, u) / 2
+    u = control(p, x, t)
+    du[1:end-1] = -grad(p.potential, x) + p.σ * u  # eq. (5)
+    du[end] = sum(abs2, u) / 2  # eq. (19)
     du
 end
 
 function controlled_noise(dg, xg, p::ProblemOptChi, t)
     x = @view xg[1:end-1]
     dg .= 0  # maybe unnecessary
-    dg[1:end-1, 1:end-1] .= p.σ
-    dg[end, 1:end-1] .= u_star(x, p, t)
+    dg[1:end-1, 1:end-1] .= p.σ  # eq. (5)
+    dg[end, 1:end-1] .= control(p, x, t)  # eq. (19)
 end
 
-SDEProblem(p::ProblemOptChi, x0) = SDEProblem(
-    controlled_drift, controlled_noise, [x0; 0.], (0., p.T), p, noise_rate_prototype = p.Σ)
+SDEProblem(p::ProblemOptChi, x0) = StochasticDiffEq.SDEProblem(
+    controlled_drift, controlled_noise, [x0; 0.], (0., p.T), p, noise_rate_prototype = p.Σ, dtmax=0.01)
+
+
+
+solve(p::ProblemOptChi, x0, showplot=false) = sol = solve(SDEProblem(p, x0))
+
+function plot(p::ProblemOptChi, sol)
+    plot(sol, label = ["X_t" "G"])
+    plot!(sol.t, control(p, sol), label = "u") |> display
+end
 
 function evaluate(p::ProblemOptChi, x0)
-    sde = SDEProblem(p, x0)
-    s = solve(sde)
-    e = p.chi(s[end][1]) * exp(-s[end][2]) - p.sl
+    s = solve(p, x0)
+    e = p.chi(s[end][1]) * exp(-s[end][2]) - p.b
     return e
 end
 
+function control(p::ProblemOptChi, sol::SciMLBase.AbstractODESolution)
+    us = []
+    for (t,u) in zip(sol.t, sol.u)
+        u = control(p, u[1:end-1], t)
+        push!(us,u[1])
+    end
+    return us
+end
+
+mean_and_std(p::ProblemOptChi, x0, n) = mean_and_std([evaluate(p, x0) for i in 1:n])
 
 ### COMPUTATION OF eigenfunction
 
@@ -109,19 +153,26 @@ function ulam(grid, n, dynamics, tol=1e-3)
     T = T ./ sum(T, dims=2)
 end
 
+function eval_std(p, x0)
+    s=sdeproblem(dynamics(), [x0])
+    sol = solve(s)
+    p.chi(sol[end]) - p.b
+end
+
 function eigenfunction(grid, T::Matrix)
     e = eigen(T, sortby=x->-real(x))
     v = e.vectors[:, 2] |> real
     @show val = e.values[2]
     int = CubicSplineInterpolation(grid, v, extrapolation_bc=Flat())
+    plot(grid, x->int(x)) |> display
     return int, v, val
 end
 
-function eigenfunction(grid=-2:.2:2, n=100, dynamics=dynamics())
+function eigenfunction(; grid=-2:.2:2, n=300, dynamics=dynamics())
     T = ulam(grid, n, dynamics, 1e-2)
-    f, v, val = eigenfunction(grid, T)
-    plot(grid, map(f, grid)) |> display
-    T, f, v, val
+    int, vec, val = eigenfunction(grid, T)
+    q = log(real(val)) / dynamics.T
+    return int, vec, q
 end
 
 dynamics(;sigma=[1.], potential=doublewell, T=.1) = (;sigma, potential, T)
@@ -129,93 +180,19 @@ dynamics(;sigma=[1.], potential=doublewell, T=.1) = (;sigma, potential, T)
 function sdeproblem(dynamics=dynamics(), x0=[0.])
     f(x,p,t) = - grad(dynamics.potential, x)
     g(x,p,t) = dynamics.sigma
-    prob = SDEProblem(f, g, x0, (0., dynamics.T))
+    prob = StochasticDiffEq.SDEProblem(f, g, x0, (0., dynamics.T))
 end
 
-#= legacy code
+using Sqra
 
-### Statistics
-
-u_star(x, k, σ) = (σ' * grad(k, x) / k(x)) :: Vector
-u_star(x, k, σ) = (σ' * grad(k, x) / k(x)) :: Vector
-
-function controlled_drift(xg, p, t)
-    (;σ, k, U, u) = p
-    x = @view xg[1:end-1]
-    uu = u(x)
-    du = [-grad(U, x) + uu; sum(abs2, uu) / 2]
-
-    return du
+function eigenfunction_sqra(; grid=-2:.2:2, potential=doublewell, sigma=1)
+    beta = 2 / sigma^2  # Einstein relation
+    u = map(potential, grid)
+    u = reshape(u, length(grid), 1)
+    Q = Sqra.sqra(u, beta) * (1/step(grid))^2 / beta
+    e = eigen(collect(Q), sortby=x->-real(x))
+    vec = e.vectors[:,2]
+    val = e.values[2]
+    int = CubicSplineInterpolation(grid, vec, extrapolation_bc=Flat())
+    return int, vec, val
 end
-
-function controlled_noise(xg, p, t)
-    (;σ, k, Σ, n, u) = p
-    x = @view xg[1:end-1]
-    Σ[n+1, 1:n] .= u(x)
-    return Σ :: Matrix
-end
-
-function controlled_parameters(σ, k, U)
-    n = size(σ,1)
-    σ = reshape(σ, n, n)
-    Σ = zeros(n+1, n+1)
-    Σ[1:n, 1:n] = σ
-    u = x -> u_star(x, k, σ)
-    return (; n, σ, Σ, k, U, u)
-end
-
-using StatsBase
-function expectation(f, x0, dynamics, n)
-    prob = sdeproblem(dynamics, x0)
-
-    ks = [f(solve(prob)[end]) for i in 1:n]
-    k, v = mean_and_var(ks)
-    return k, v
-end
-
-
-controlled_problem(; σ=[1], U=doublewell, k=k1, x0 = [0.], T = 1) = controlled_problem(σ, U, k, x0, T)
-
-function controlled_problem(σ, U, k, x0, T)
-    p = controlled_parameters(σ, k, U)
-    SDEProblem(controlled_drift, controlled_noise, [x0; 0], (0., T), p, noise_rate_prototype = ones(p.n+1, p.n+1))
-end
-
-# leads to zero control
-k1(x) = 0 * sum(x) + 1 # positive for division, 0 mult for zygote to not return nothing
-
-function optexp(f)
-    k(x) = f(x[1]) + 1 # shifted eigenfunction
-    p = controlled_problem(k=k)
-    s = solve(p)
-    plot(s) |> display
-
-    k(s[end][1]) * exp(-s[end][2]) - 1 # this should be 0 variance for K[f]
-    k, p, s
-end
-
-function compare(nef = 1000, nsol = 10000)
-    T, f = eigenfunction(-2:.1:2, 2000) # compute the eigenfunction
-    k(x) =  f(x[1]) + 1 # shifted eigenfunction
-    #k(x) = f(x[1]) - minimum(f.(-3:3)) + 0.1
-    p0 = controlled_problem(ones(1,1), doublewell, x->1, 0., 1.)
-    pu = controlled_problem(ones(1,1), doublewell, k, 0., 1.)
-    sol0=[solve(p0) for i in 1:10000]
-    solu=[solve(pu) for i in 1:10000]
-
-    map([solu, sol0]) do sol
-        ex = eval_girsanov.(sol, k)
-       @show mean_and_std(ex)
-       histogram(ex)|>display
-    end
-    sol0, solu, f
-end
-
-
-
-
-eval_girsanov(s::DifferentialEquations.RODESolution, k) = eval_girsanov(s[end][1], s[end][2], k)
-
-eval_girsanov(x, g, k) = k(x) * exp(-g)
-
-=#
