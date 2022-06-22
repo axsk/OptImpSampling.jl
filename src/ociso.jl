@@ -44,8 +44,27 @@ struct ProblemOptChi{P, C}
     q::Float64 # rate of eigenfunction
     b::Float64 # scale * lowerbound(shift)
 end
+#=
+struct ProblemOptChiCached{P, C}
+    potential::P
+    T::Float64 # lag-time
+    σ::Matrix{Float64} # noise
+    Σ::Matrix{Float64} # augmented noise
+    chi::C # chi function
+    q::Float64 # rate of eigenfunction
+    b::Float64 # scale * lowerbound(shift)
+    dU
+    df
+end
 
 ProblemOptChi(chi, q, b) = ProblemOptChi(doublewell, 1., ones(1,1), collect(Diagonal([1.,0])), chi, q, b)
+function ProblemOptChiC(chi, q, b)
+
+    x = [1.]
+    cdU = ForwardDiff.GradientConfig()
+
+    ProblemOptChi(doublewell, 1., ones(1,1), collect(Diagonal([1.,0])), chi, q, b)
+end =#
 
 function plot_grad_and_u(p, grid=-2:.05:2)
     plot(grid, x->grad(p.chi, [x])[1], label="grad")
@@ -60,27 +79,29 @@ function ProblemOptChi(; n=300)
     ProblemOptChi(chi, q, b)
 end
 
-function ProblemOptChiSqra()
-    f, v, q = eigenfunction_sqra()
+function ProblemOptChiSqra(;grid=-2:.2:2)
+    f, v, q = eigenfunction_sqra(grid=grid)
     b = -minimum(v) + .1
     #b = 1.
     chi(x) = f(x[1]) + b
     ProblemOptChi(chi, q, b)
 end
 
-global linforce = 1.
+global linforce :: Float64 = 1.
 
 control(p::ProblemOptChi, x::AbstractVector, t) = control(x, t, p.T, p.σ, p.chi, p.q, p.b)
 
 function control(x, t, T, σ, chi, q, b)
     @assert q<0
     λ = exp(q * (T-t))
-    u = σ' * grad(chi, x) / (chi(x) - b + b / λ)  # this is a weird way to write this
+    u = σ' * grad(chi, x)
+    u /= (chi(x) - b + b / λ)  # this is a weird way to write this
     return linforce*u
 end
 
 
 function controlled_drift(du, xg, p::ProblemOptChi, t)
+    @show "d", xg
     x = @view xg[1:end-1]
     u = control(p, x, t)
     du[1:end-1] = -grad(p.potential, x) + p.σ * u  # eq. (5)
@@ -88,7 +109,21 @@ function controlled_drift(du, xg, p::ProblemOptChi, t)
     du
 end
 
+#=
+function controlled_drift_cached(x)
+    cfg = ForwardDiff.GradientConfig(p.potential, x)
+    function f(du, xg, p, t)
+        x = @view xg[1:end-1]
+        u = control(p, x, t)
+        du[1:end-1] = -ForwardDiff.gradient(p.potential, x, cfg) + p.σ * u  # eq. (5)
+        du[end] = sum(abs2, u) / 2  # eq. (19)
+    end
+    return f
+end
+=#
+
 function controlled_noise(dg, xg, p::ProblemOptChi, t)
+    @show "n", xg
     x = @view xg[1:end-1]
     dg .= 0  # maybe unnecessary
     dg[1:end-1, 1:end-1] .= p.σ  # eq. (5)
@@ -96,11 +131,11 @@ function controlled_noise(dg, xg, p::ProblemOptChi, t)
 end
 
 SDEProblem(p::ProblemOptChi, x0) = StochasticDiffEq.SDEProblem(
-    controlled_drift, controlled_noise, [x0; 0.], (0., p.T), p, noise_rate_prototype = p.Σ, dtmax=0.01)
+    controlled_drift, controlled_noise, [x0; 0.], (0., p.T), p, noise_rate_prototype = p.Σ)
 
 
 
-solve(p::ProblemOptChi, x0, showplot=false) = sol = solve(SDEProblem(p, x0))
+solve(p::ProblemOptChi, x0; showplot=false, solver=SROCK2(), dt=.01) = solve(SDEProblem(p, x0), solver, dt=dt)
 
 function plot(p::ProblemOptChi, sol)
     plot(sol, label = ["X_t" "G"])
