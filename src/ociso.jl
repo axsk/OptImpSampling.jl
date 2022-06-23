@@ -17,10 +17,38 @@ import DifferentialEquations.solve
 import StatsBase.mean_and_std
 using Parameters
 using Zygote
+using StaticArrays
 
 #grad(f, x) = collect(Flux.gradient(f, x)[1])
-grad(f, x) = ForwardDiff.gradient(f, x)
+fgrad(f, x) = ForwardDiff.gradient(f, x)
 #grad(f,x) = Zygote.gradient(f, x)[1]
+
+global cache = Dict{Tuple{DataType, Int64}, ForwardDiff.GradientConfig}()
+global temp = Dict{Tuple{DataType, Int64}, Vector{Float64}}()
+
+function cfgrad(f, x)
+    df = get!(temp, (typeof(f), length(x))) do
+        copy(x)
+    end :: Vector{Float64}
+    cfg = get!(cache, (typeof(f), length(x))) do
+        ForwardDiff.GradientConfig(f, x)
+    end :: ForwardDiff.GradientConfig
+    ForwardDiff.gradient!(df, f, x, cfg)
+    df::Vector{Float64}
+end
+
+grad(f, x) = fgrad(f, x)
+
+struct Differentiator{F,T}
+    f::F
+    cfg::T
+
+end
+Differentiator(f, x::AbstractArray) = Differentiator(f, ForwardDiff.GradientConfig(f, x))
+
+(d::Differentiator)(x) = d.f(x)
+grad(d::Differentiator, x) = ForwardDiff.gradient(d.f, x, d.cfg)
+grad!(df, d::Differentiator, x) = ForwardDiff.gradient!(df, d.f, x, d.cfg)
 
 
 doublewell(x) = ((x[1])^2 - 1) ^ 2
@@ -59,16 +87,18 @@ control(p::ProblemOptControl, x::AbstractVector, t) = control(x, t, p.T, p.σ, p
 function control(x, t, T, σ, chi, q, b)
     @assert q<0
     λ = exp(q * (T-t))
-    u = σ' * grad(chi, x)
-    u /= (chi(x) - b + b / λ)  # this is a weird way to write this
-    return linforce*u :: Vector{Float64}
+    x = SVector{1}(x)
+    u = grad(chi, x)
+    u = (SMatrix{1,1}(σ)' * u)
+    u *=  linforce / (chi(x) - b + b / λ)
+    return u
 end
 
 function controlled_drift(du, xg::Vector{Float64}, p::ProblemOptControl, t)
     x = @view xg[1:end-1]
     u = control(p, x, t)
-    du[1:end-1] = - grad(p.potential, x)
-    du[1:end-1] += p.σ * u  # eq. (5)
+    du[1:end-1] = - grad(p.potential, SVector{1}(x))
+    @view(du[1:end-1]) .+= SMatrix{1,1}(p.σ) * u  # eq. (5)
     du[end] = sum(abs2, u) / 2  # eq. (19)
 end
 
