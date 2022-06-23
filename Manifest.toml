@@ -2,7 +2,7 @@
 
 julia_version = "1.8.0-beta3"
 manifest_format = "2.0"
-project_hash = "f619c1de7a4e024e1b8818c8af0f8d2c0fc963a5"
+project_hash = "dd3f5953aa4fa80dc5382bad48979b086560fc76"
 
 [[deps.AbstractFFTs]]
 deps = ["ChainRulesCore", "LinearAlgebra"]
@@ -297,7 +297,7 @@ version = "0.4.0"
 
 [[deps.DiffEqBase]]
 deps = ["ArrayInterfaceCore", "ChainRulesCore", "DataStructures", "Distributions", "DocStringExtensions", "FastBroadcast", "ForwardDiff", "FunctionWrappers", "LinearAlgebra", "Logging", "MuladdMacro", "NonlinearSolve", "Parameters", "Printf", "RecursiveArrayTools", "Reexport", "Requires", "SciMLBase", "Setfield", "SparseArrays", "StaticArrays", "Statistics", "ZygoteRules"]
-git-tree-sha1 = "6df88c24248cd66e56ab0c073c4f8f24cd3fea29"
+path = "/home/htc/bzfsikor/.julia/dev/DiffEqBase"
 uuid = "2b5f629d-d688-5b77-993f-72d75c75574e"
 version = "6.91.6"
 
