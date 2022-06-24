@@ -23,94 +23,47 @@ using StaticArrays
 fgrad(f, x) = ForwardDiff.gradient(f, x)
 #grad(f,x) = Zygote.gradient(f, x)[1]
 
-global cache = Dict{Tuple{DataType, Int64}, ForwardDiff.GradientConfig}()
-global temp = Dict{Tuple{DataType, Int64}, Vector{Float64}}()
-
-function cfgrad(f, x)
-    df = get!(temp, (typeof(f), length(x))) do
-        copy(x)
-    end :: Vector{Float64}
-    cfg = get!(cache, (typeof(f), length(x))) do
-        ForwardDiff.GradientConfig(f, x)
-    end :: ForwardDiff.GradientConfig
-    ForwardDiff.gradient!(df, f, x, cfg)
-    df::Vector{Float64}
-end
-
 grad(f, x) = fgrad(f, x)
-
-abstract type Diff end
-struct Differentiator2{F,T,R} <: Diff
-    f::F
-    cfg::T
-    res::R
-end
-Diff(f, x::AbstractArray) = Differentiator2(f, ForwardDiff.GradientConfig(f, x), copy(x))
-
-(d::Diff)(x) = d.f(x)
-function grad(d::Diff, x)
-    ForwardDiff.gradient!(d.res, d.f, x, d.cfg)
-    d.res
-end
-grad!(df, d::Diff, x) = ForwardDiff.gradient!(df, d.f, x, d.cfg)
-
 
 doublewell(x) = ((x[1])^2 - 1) ^ 2
 
 abstract type ProblemOptControl end
-@with_kw mutable struct ProblemOptChi4{P, C} <: ProblemOptControl
+@with_kw mutable struct ProblemOptChi5{P, C} <: ProblemOptControl
     potential::P            = doublewell
     T::Float64              = 1              # lag-time
     σ::Matrix{Float64}      = ones(1,1)      # noise
-    Σ::Matrix{Float64}      = zeros(2,2)     # augmented noise
+    Σ::Matrix{Float64}      = ones(2,2)     # augmented noise
     chi::C                                   # chi function
     q::Float64                               # rate of eigenfunction
     b::Float64                               # scale * lowerbound(shift)
     dt::Float64             = 0.01
     forcing::Float64        = 1.
-end
-
-@with_kw mutable struct ProblemOptCached{P, C, CA} <: ProblemOptControl
-    potential::P            = doublewell
-    T::Float64              = 1              # lag-time
-    σ::Matrix{Float64}      = ones(1,1)      # noise
-    Σ::Matrix{Float64}      = zeros(2,2)     # augmented noise
-    chi::C                                   # chi function
-    q::Float64                               # rate of eigenfunction
-    b::Float64                               # scale * lowerbound(shift)
-    dt::Float64             = 0.01
-    forcing::Float64        = 1.
-    derivatives::CA
 end
 
 derivatives(U, chi, x) = (; dU = Diff(U, x), dchi = Diff(chi, x))
 
-ProblemOptChi(chi, q, b) = ProblemOptChi4(doublewell, 1., ones(1,1), collect(Diagonal([1.,0])), chi, q, b, 0.01, 1.)
-#ProblemOptChi(chi, q, b) = ProblemOptCached(doublewell, 1., ones(1,1), collect(Diagonal([1.,0])), chi, q, b, 0.01, 1., derivatives(doublewell, chi, ones(1)))
+#ProblemOptChi(chi, q, b) = ProblemOptChi4(doublewell, 1., ones(1,1), collect(Diagonal([1.,0])), chi, q, b, 0.01, 1.)
 
 function plot_grad_and_u(p, grid=-2:.05:2)
     plot(grid, x->grad(p.chi, [x])[1], label="grad")
     plot!(grid, x->control(p, [x],0)[1], label ="u*")
 end
 
-function ProblemOptChi(;step=0.1, grid=-2:step:2)
+function ProblemOptChi(;step=0.1, grid=-2:step:2, kwargs...)
     f, v, q = eigenfunction_sqra(grid=grid)
     b = -minimum(v) + .1
     chi(x) = f(x[1]) + b
-    ProblemOptChi(chi, q, b)
+    ProblemOptChi5(chi=chi, q=q, b=b; kwargs...)
 end
 
-global linforce :: Float64 = 1.
+control(p::ProblemOptControl, x::AbstractVector, t) = control(x, t, p.T, p.σ, p.chi, p.q, p.b, p.forcing)
 
-control(p::ProblemOptControl, x::AbstractVector, t) = control(x, t, p.T, p.σ, p.chi, p.q, p.b)
-
-function control(x, t, T, σ, chi, q, b)
+function control(x, t, T, σ, chi, q, b, forcescale)
     @assert q<0
     λ = exp(q * (T-t))
     x = SVector{1}(x)
     u = grad(chi, x)
-    u = SMatrix{1,1}(σ)' * u
-    u *=  linforce / (chi(x) - b + b / λ)
+    u = SMatrix{1,1}(σ)' * u * forcescale / (chi(x) - b + b / λ)
     return u
 end
 
@@ -124,9 +77,9 @@ end
 
 function controlled_noise(dg, xg, p::ProblemOptControl, t)
     x = @view xg[1:end-1]
-    dg .= 0  # maybe unnecessary
     dg[1:end-1, 1:end-1] .= p.σ  # eq. (5)
     dg[end, 1:end-1] .= control(p, x, t)  # eq. (19)
+    dg[:, end] .= 0
 end
 
 function SDEProblem(p::ProblemOptControl, x0)
@@ -135,6 +88,22 @@ function SDEProblem(p::ProblemOptControl, x0)
 end
 
 solve(p::ProblemOptControl, x0; showplot=false, solver=SROCK2(), dt=p.dt) = solve(SDEProblem(p, x0), solver, dt=dt)
+
+
+function plotconvergence(;n=100, steps=[.01, .03, .1, .3], dts=[.001, .003, .01, .03, .1], kwargs...)
+    p = plot(xlabel="dx", ylabel="std", xaxis=:log, yaxis=:log)
+
+        for dt in reverse(dts)
+            stds = map(reverse(steps)) do step
+
+                mean, std = mean_and_std(ProblemOptChi(;step=step, dt=dt, kwargs...),0., n)
+                std
+            end
+            plot!(p, steps, stds, label="dt=$dt")
+        end
+
+    p
+end
 
 ## Utility functions
 
@@ -161,7 +130,7 @@ end
 mean_and_std(p::ProblemOptControl, x0, n) = mean_and_std([evaluate(p, x0) for i in 1:n])
 
 function test()
-    p = ProblemOptChiSqra()
+    p = ProblemOptChi()
     mean_and_std(p, 0., 100)
 end
 
