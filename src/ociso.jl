@@ -86,7 +86,7 @@ end
 derivatives(U, chi, x) = (; dU = Diff(U, x), dchi = Diff(chi, x))
 
 ProblemOptChi(chi, q, b) = ProblemOptChi4(doublewell, 1., ones(1,1), collect(Diagonal([1.,0])), chi, q, b, 0.01, 1.)
-ProblemOptChi(chi, q, b) = ProblemOptCached(doublewell, 1., ones(1,1), collect(Diagonal([1.,0])), chi, q, b, 0.01, 1., derivatives(doublewell, chi, ones(1)))
+#ProblemOptChi(chi, q, b) = ProblemOptCached(doublewell, 1., ones(1,1), collect(Diagonal([1.,0])), chi, q, b, 0.01, 1., derivatives(doublewell, chi, ones(1)))
 
 function plot_grad_and_u(p, grid=-2:.05:2)
     plot(grid, x->grad(p.chi, [x])[1], label="grad")
@@ -102,26 +102,23 @@ end
 
 global linforce :: Float64 = 1.
 
-control(p::ProblemOptControl, x::AbstractVector, t) = control(x, t, p.T, p.σ, p.chi, p.q, p.b, p.derivatives.dchi)
+control(p::ProblemOptControl, x::AbstractVector, t) = control(x, t, p.T, p.σ, p.chi, p.q, p.b)
 
-function control(x, t, T, σ, chi, q, b, dchi)
+function control(x, t, T, σ, chi, q, b)
     @assert q<0
     λ = exp(q * (T-t))
-    #x = SVector{1}(x)
-    u = grad(dchi, x)
-    #u = grad(dchi, x)
-    u .= σ' * u
-    u .*=  linforce / (chi(x) - b + b / λ)
+    x = SVector{1}(x)
+    u = grad(chi, x)
+    u = SMatrix{1,1}(σ)' * u
+    u *=  linforce / (chi(x) - b + b / λ)
     return u
 end
 
 function controlled_drift(du, xg::Vector{Float64}, p::ProblemOptControl, t)
     x = @view xg[1:end-1]
     u = control(p, x, t)
-    #du[1:end-1] = - grad(p.potential, SVector{1}(x))
-    du[1:end-1] = - grad(p.derivatives.dU, x)
-    #@view(du[1:end-1]) .+= SMatrix{1,1}(p.σ) * u  # eq. (5)
-    @view(du[1:end-1]) .+= p.σ * u  # eq. (5)
+    du[1:end-1] = - grad(p.potential, SVector{1}(x))
+    @view(du[1:end-1]) .+= SMatrix{1,1}(p.σ) * u  # eq. (5)
     du[end] = sum(abs2, u) / 2  # eq. (19)
 end
 
