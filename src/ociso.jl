@@ -18,6 +18,7 @@ import StatsBase.mean_and_std
 using Parameters
 using Zygote
 using StaticArrays
+using Arpack
 
 #grad(f, x) = collect(Flux.gradient(f, x)[1])
 fgrad(f, x) = ForwardDiff.gradient(f, x)
@@ -89,7 +90,10 @@ end
 
 solve(p::ProblemOptControl, x0; showplot=false, solver=SROCK2(), dt=p.dt) = solve(SDEProblem(p, x0), solver, dt=dt)
 
-plotconvbig() = plotconvergence(n=1000, steps=[0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, .5], dts=[.1, 0.01, 0.001, 0.0001])
+function plotconvbig()
+    plotconvergence(n=1000, steps=[0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, .5], dts=[.1, 0.01, 0.001, 0.0001, 0.00001])
+    savefig("plotconvbig.png")
+end
 plotconvsmall() = plotconvergence(n=10, steps=[0.1, 0.2], dts=[.1, .01])
 
 function plotconvergence(;n=100, steps=[.01, .03, .1, .3], dts=[.001, .003, .01, .03, .1], kwargs...)
@@ -104,7 +108,7 @@ function plotconvergence(;n=100, steps=[.01, .03, .1, .3], dts=[.001, .003, .01,
             push!(ts, t)
             std
         end
-        plot!(p, steps, stds, label="dt=$dt", markersize=log.(ts.*1000), markershape=:circle) |> display
+        plot!(p, steps, stds, label="dt=$dt", markersize=sqrt.(ts), markershape=:circle) |> display
     end
 
     p
@@ -148,9 +152,9 @@ function eigenfunction_sqra(; grid=-2:.2:2, potential=doublewell, sigma=1)
     u = map(potential, grid)
     u = reshape(u, length(grid), 1)
     Q = Sqra.sqra(u, beta) * (1/step(grid))^2 / beta
-    e = eigen(collect(Q), sortby=x->-real(x))
-    vec = e.vectors[:,2]
-    val = e.values[2]
+    val, vec = eigs(Q, which=:SM, nev=2)
+    vec = vec[:,2] |> real
+    val = val[2] |> real
     int = CubicSplineInterpolation(grid, vec, extrapolation_bc=Flat())
     return int, vec, val
 end

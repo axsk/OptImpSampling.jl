@@ -1,4 +1,5 @@
 [deps]
+Arpack = "7d9fca2a-8960-54d3-9f78-7d1dccf2cb97"
 DiffEqBase = "2b5f629d-d688-5b77-993f-72d75c75574e"
 DiffResults = "163ba53b-c6d8-5494-b064-1a9d43ac40c5"
 DifferentialEquations = "0c46a032-eb83-5123-abaf-570d42b7fbaa"
