@@ -89,18 +89,23 @@ end
 
 solve(p::ProblemOptControl, x0; showplot=false, solver=SROCK2(), dt=p.dt) = solve(SDEProblem(p, x0), solver, dt=dt)
 
+plotconvbig() = plotconvergence(n=1000, steps=[0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, .5], dts=[.1, 0.01, 0.001, 0.0001])
+plotconvsmall() = plotconvergence(n=10, steps=[0.1, 0.2], dts=[.1, .01])
 
 function plotconvergence(;n=100, steps=[.01, .03, .1, .3], dts=[.001, .003, .01, .03, .1], kwargs...)
-    p = plot(xlabel="dx", ylabel="std", xaxis=:log, yaxis=:log)
+    p = plot(xlabel="dx", ylabel="std", xaxis=:log, yaxis=:log, legend=:bottomright)
 
-        for dt in reverse(dts)
-            stds = map(reverse(steps)) do step
+    @time for dt in dts
+        ts = []
+        stds = map(steps) do step
 
-                mean, std = mean_and_std(ProblemOptChi(;step=step, dt=dt, kwargs...),0., n)
-                std
-            end
-            plot!(p, steps, stds, label="dt=$dt")
+            t = @elapsed mean, std = mean_and_std(ProblemOptChi(;step=step, dt=dt, kwargs...),0., n)
+            @show dt, step, t
+            push!(ts, t)
+            std
         end
+        plot!(p, steps, stds, label="dt=$dt", markersize=log.(ts.*1000), markershape=:circle) |> display
+    end
 
     p
 end
