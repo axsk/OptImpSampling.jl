@@ -20,9 +20,9 @@ using Zygote
 using StaticArrays
 using Arpack
 
-#grad(f, x) = collect(Flux.gradient(f, x)[1])
+xgrad(f, x) = collect(Flux.gradient(f, x)[1])
 fgrad(f, x) = ForwardDiff.gradient(f, x)
-#grad(f,x) = Zygote.gradient(f, x)[1]
+zgrad(f,x) = Zygote.gradient(f, x)[1]
 
 grad(f, x) = fgrad(f, x)
 
@@ -60,6 +60,7 @@ end
 control(p::ProblemOptControl, x::AbstractVector, t) = control(x, t, p.T, p.σ, p.chi, p.q, p.b, p.forcing)
 
 function control(x, t, T, σ, chi, q, b, forcescale)
+    forcescale == 0. && return @SVector [0.]
     @assert q<0
     λ = exp(q * (T-t))
     x = SVector{1}(x)
@@ -88,7 +89,10 @@ function SDEProblem(p::ProblemOptControl, x0)
         [x0; 0.], (0., p.T), p, noise_rate_prototype = p.Σ)
 end
 
-solve(p::ProblemOptControl, x0; showplot=false, solver=SROCK2(), dt=p.dt) = solve(SDEProblem(p, x0), solver, dt=dt)
+function solve(p::ProblemOptControl, x0; solver=SROCK2(), dt=p.dt)
+    prob = SDEProblem(p, x0)
+    solve(prob, solver, dt=dt)
+end
 
 function plotconvbig()
     plotconvergence(n=1000, steps=[0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, .5], dts=[.1, 0.01, 0.001, 0.0001, 0.00001])
@@ -121,9 +125,9 @@ function plot(p::ProblemOptControl, sol)
     plot!(sol.t, control(p, sol), label = "u") |> display
 end
 
-function evaluate(p::ProblemOptControl, x0)
+function evaluate(p::ProblemOptControl, x0::AbstractVector)
     s = solve(p, x0)
-    e = p.chi(s[end][1]) * exp(-s[end][2]) - p.b
+    e = p.chi(s[end][1:end-1]) * exp(-s[end][2]) - p.b
     return e
 end
 
