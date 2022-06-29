@@ -15,22 +15,22 @@ function shiftscale!(ys, stds)
     a, b = extrema(ys)
     ys .= (ys .- a) ./ (b - a)
     stds ./= (b-a)
-    q = log(b-a)
-    q = q < 0 ? q : -1  # TODO: think of sane handling
-    s = (a+b)/2
-    return q, s
+    λ = b-a  # inferred eigenvalue
+    s = a / (a + 1 - b)  # inferred shift
+    return λ, s
 end
 
 """ shift scaled koopman sampling """
 function SK(ocp, xs::AbstractVector, nmc=10)
     kxs = zeros(length(xs))
     stds = zeros(length(xs))
+    # TODO @threads zip(xs, 1:nmc) -> matrix
     for i in 1:length(xs)
         kxs[i], stds[i] = mean_and_std(evaluate(ocp, xs[i]) for j in 1:nmc)
     end
-    q, b = shiftscale!(kxs, stds)
+    λ, b = shiftscale!(kxs, stds)
     stds ./= sqrt(nmc)
-    kxs, stds, q, b
+    kxs, stds, λ, b
 end
 
 @with_kw mutable struct Isokann1
@@ -57,7 +57,8 @@ function run(iso::Isokann)
         ocp = ProblemOptChi5(chi=chi, q=q, b=b, forcing=forcing, dt=dt)
         #xs = [rand(1) * 4 .- 2 for i in 1:nx]
         xs = map(x->[x], range(-2, 2, nx))
-        target, std, q, b = SK(ocp, xs, nmc)
+        target, std, λ, b = SK(ocp, xs, nmc)
+        q = min(log(λ), 0)  # dont allow positive rates
 
         for j in 1:learniter
             loss = learnstep!(model, xs, target, opt)

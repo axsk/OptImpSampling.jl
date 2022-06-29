@@ -61,7 +61,7 @@ control(p::ProblemOptControl, x::AbstractVector, t) = control(x, t, p.T, p.σ, p
 
 function control(x, t, T, σ, chi, q, b, forcescale)
     forcescale == 0. && return @SVector [0.]
-    @assert q<0
+    @assert q<=0
     λ = exp(q * (T-t))
     x = SVector{1}(x)
     u = grad(chi, x)
@@ -127,6 +127,7 @@ end
 
 function evaluate(p::ProblemOptControl, x0::AbstractVector)
     s = solve(p, x0)
+    @show s[end]
     e = p.chi(s[end][1:end-1]) * exp(-s[end][2]) - p.b
     return e
 end
