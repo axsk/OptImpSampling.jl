@@ -94,6 +94,20 @@ function solve(p::ProblemOptControl, x0; solver=SROCK2(), dt=p.dt)
     solve(prob, solver, dt=dt)
 end
 
+function evaluate(p::ProblemOptControl, x0::AbstractVector)
+    s = solve(p, x0)
+    x = s[end][1:end-1]
+    @assert all(isfinite.(x))
+    y = p.chi(x)
+    @assert isfinite(y)
+    e = y * exp(-s[end][end])  # - p.b
+    @assert isfinite(e)
+    return e
+end
+
+
+## Plots
+
 function plotconvbig()
     plotconvergence(n=1000, steps=[0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, .5], dts=[.1, 0.01, 0.001, 0.0001, 0.00001])
     savefig("plotconvbig.png")
@@ -125,12 +139,6 @@ function plot(p::ProblemOptControl, sol)
     plot!(sol.t, control(p, sol), label = "u") |> display
 end
 
-function evaluate(p::ProblemOptControl, x0::AbstractVector)
-    s = solve(p, x0)
-    @show s[end]
-    e = p.chi(s[end][1:end-1]) * exp(-s[end][2]) - p.b
-    return e
-end
 
 function control(p::ProblemOptControl, sol::SciMLBase.AbstractODESolution)
     us = []
