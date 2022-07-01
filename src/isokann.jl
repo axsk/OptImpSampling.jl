@@ -66,6 +66,7 @@ sample(s::GridSampler) = [rand(1) * (s.max-s.min) .+ s.min for i in 1:s.n]
 
 Isokann = Isokann3
 converging() = Isokann3(poweriter=1000, learniter=100, nmc=100, forcing=1, opt=ADAM(0.001), model=mlp([1,3,3], false), dt=.01)
+happy1() = Isokann(nx=30, poweriter=100, learniter=100, nmc=3, forcing=1., opt= ADAM(0.01), dt=0.01)
 
 function run(iso::AIsokann; liveplot=false)
     (;nx, nmc, poweriter, learniter, opt, model, forcing, dt, ls, stds) = iso
@@ -74,10 +75,10 @@ function run(iso::AIsokann; liveplot=false)
     local plt
     for i in 1:poweriter
         chi = statify(model)
-        ocp = ProblemOptChi5(chi=chi, q=q, b=b, forcing=forcing, dt=dt)
+        ocp = ProblemOptChi(chi=chi, q=q, b=b, forcing=forcing, dt=dt)
         #xs = [rand(1) * 4 .- 2 for i in 1:nx]
         #xs = map(x->[x], range(-2, 2, nx))
-        xs = sample(UniformSampler(-2,2,nmc))
+        xs = sample(UniformSampler(-2,2,nx))
         target, std, λ, b = SK(ocp, xs, nmc)
         q = min(log(λ), 0)  # dont allow positive rates
 

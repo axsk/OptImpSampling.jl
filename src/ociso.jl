@@ -27,6 +27,7 @@ zgrad(f,x) = Zygote.gradient(f, x)[1]
 grad(f, x) = fgrad(f, x)
 
 doublewell(x) = ((x[1])^2 - 1) ^ 2
+
 function triplewell(u)
     x, y = u
     V =  (3/4 * exp(-x^2 - (y-1/3)^2)
@@ -36,29 +37,22 @@ function triplewell(u)
         + 1/20 * x^4 + 1/20 * (y-1/3)^4)
 end
 
-abstract type ProblemOptControl end
-@with_kw mutable struct ProblemOptChi5{P, C} <: ProblemOptControl
-    potential::P            = doublewell
-    T::Float64              = 1              # lag-time
-    σ::Matrix{Float64}      = ones(1,1)      # noise
-    Σ::Matrix{Float64}      = ones(2,2)     # augmented noise
-    chi::C                                   # chi function
-    q::Float64                               # rate of eigenfunction
-    b::Float64                               # scale * lowerbound(shift)
-    dt::Float64             = 0.01
-    forcing::Float64        = 1.
-end
+dim(::typeof(doublewell)) = 1
+dim(::typeof(triplewell)) = 2
 
-@with_kw mutable struct ProblemOptChi9{N, P, C} <: ProblemOptControl
+abstract type ProblemOptControl end
+@with_kw mutable struct ProblemOptChi11{N, P, C, NN} <: ProblemOptControl
     potential::P             = doublewell
     T::Float64               = 1              # lag-time
-    σ::SMatrix{N,N, Float64} = SMatrix{1,1,Float64}(I)      # noise
+    σ::SMatrix{N,N, Float64, NN} = SMatrix{dim(potential),dim(potential),Float64}(I)      # noise
     chi::C                                   # chi function
     q::Float64                               # rate of eigenfunction
     b::Float64                               # scale * lowerbound(shift)
     dt::Float64              = 0.01
     forcing::Float64         = 1.
 end
+
+ProblemOptChi = ProblemOptChi11
 
 Sigma(sigma) = similar(sigma, size(sigma).+1 ...)
 
@@ -71,35 +65,39 @@ function plot_grad_and_u(p, grid=-2:.05:2)
     plot!(grid, x->control(p, [x],0)[1], label ="u*")
 end
 
-function ProblemOptChi(;step=0.1, grid=-2:step:2, kwargs...)
+function ProblemOptSqra(;step=0.1, grid=-2:step:2, kwargs...)
     f, v, q = eigenfunction_sqra(grid=grid)
     b = -minimum(v) + .1
     chi(x) = f(x[1]) + b
-    ProblemOptChi5(chi=chi, q=q, b=b; kwargs...)
+    ProblemOptChi(chi=chi, q=q, b=b; kwargs...)
 end
 
-control(p::ProblemOptControl, x::AbstractVector, t) = control(x, t, p.T, p.σ, p.chi, p.q, p.b, p.forcing)
+function control(p::ProblemOptChi{N}, x::AbstractVector, t) where {N}
+    control(x, t, p.T, p.σ, p.chi, p.q, p.b, p.forcing, Val(N))
+end
 
-function control(x, t, T, σ, chi, q, b, forcescale)
-    forcescale == 0. && return @SVector [0.]
-    @assert q<=0
+# optimal control assuming χ = λϕ + b with Kϕ = λϕ and λ = exp(tq)
+function control(x, t, T, σ, χ, q, b, forcescale, _::Val{N}) where {N}
+    forcescale == 0. && return zero(SVector{N})
+    @assert q <= 0
     λ = exp(q * (T-t))
-    x = SVector{1}(x)
-    u = grad(chi, x)
-    u = SMatrix{1,1}(σ)' * u * forcescale / (chi(x) - b + b / λ)
+    logψ(x) = log(λ*(χ(x)-b) + b)
+    u = forcescale * σ' * grad(logψ, x)
     return u
 end
 
+statify(p::ProblemOptChi{N}, x::AbstractVector) where {N} = SVector{N}(x)
+
 function controlled_drift(du, xg::Vector{Float64}, p::ProblemOptControl, t)
-    x = @view xg[1:end-1]
+    x = statify(p, @view xg[1:end-1])
     u = control(p, x, t)
-    du[1:end-1] = - grad(p.potential, SVector{1}(x))
-    @view(du[1:end-1]) .+= SMatrix{1,1}(p.σ) * u  # eq. (5)
+    du[1:end-1] = - grad(p.potential, x)
+    @view(du[1:end-1]) .+= p.σ * u  # eq. (5)
     du[end] = sum(abs2, u) / 2  # eq. (19)
 end
 
 function controlled_noise(dg, xg, p::ProblemOptControl, t)
-    x = @view xg[1:end-1]
+    x = statify(p, @view xg[1:end-1])
     dg[1:end-1, 1:end-1] .= p.σ  # eq. (5)
     dg[end, 1:end-1] .= control(p, x, t)  # eq. (19)
     dg[:, end] .= 0
@@ -150,7 +148,7 @@ function plotconvbig()
     plotconvergence(n=1000, steps=[0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, .5], dts=[.1, 0.01, 0.001, 0.0001, 0.00001])
     savefig("plotconvbig.png")
 end
-plotconvsmall() = plotconvergence(n=10, steps=[0.1, 0.2], dts=[.1, .01])
+plotconvsmall() = plotconvergence(n=10, steps=[0.01, 0.1, 0.2], dts=[.1, .01])
 
 function plotconvergence(;n=100, steps=[.01, .03, .1, .3], dts=[.001, .003, .01, .03, .1], kwargs...)
     p = plot(xlabel="dx", ylabel="std", xaxis=:log, yaxis=:log, legend=:bottomright)
@@ -159,7 +157,7 @@ function plotconvergence(;n=100, steps=[.01, .03, .1, .3], dts=[.001, .003, .01,
         ts = []
         stds = map(steps) do step
 
-            t = @elapsed mean, std = mean_and_std(ProblemOptChi(;step=step, dt=dt, kwargs...),0., n)
+            t = @elapsed mean, std = mean_and_std(ProblemOptSqra(;step=step, dt=dt, kwargs...),[0.], n)
             @show dt, step, t
             push!(ts, t)
             std
@@ -187,7 +185,7 @@ function control(p::ProblemOptControl, sol::SciMLBase.AbstractODESolution)
     return us
 end
 
-mean_and_std(p::ProblemOptControl, x0, n) = mean_and_std([evaluate(p, x0) for i in 1:n])
+mean_and_std(p::ProblemOptControl, x0, n) = mean_and_std(evaluate(p, x0, n))
 
 function test()
     p = ProblemOptChi()
