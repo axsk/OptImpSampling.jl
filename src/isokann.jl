@@ -26,14 +26,16 @@ function SK(ocp, xs::AbstractVector, nmc=10)
     stds = zeros(length(xs))
     # TODO @threads zip(xs, 1:nmc) -> matrix
     Threads.@threads for i in 1:length(xs)
-        kxs[i], stds[i] = mean_and_std(evaluate(deepcopy(ocp), xs[i]) for j in 1:nmc)
+        kxs[i], stds[i] = mean_and_std(evaluate(deepcopy(ocp), xs[i], nmc))
+        yield()
     end
     λ, b = shiftscale!(kxs, stds)
     stds ./= sqrt(nmc)  # monte carlo variance
     kxs, stds, λ, b
 end
 
-@with_kw mutable struct Isokann1
+abstract type AIsokann end
+@with_kw mutable struct Isokann3 <: AIsokann
     nx = 10
     nmc = 10
     poweriter = 100
@@ -42,23 +44,40 @@ end
     model = mlp()
     forcing = 0.
     dt = .01
-end
-
-
-Isokann = Isokann1
-converging() = Isokann(poweriter=1000, learniter=100, nmc=100, forcing=1, opt=ADAM(0.001), model=mlp([1,3,3], false), dt=.01)
-
-function run(iso::Isokann)
-    (;nx, nmc, poweriter, learniter, opt, model, forcing, dt) = iso
     ls = Float64[]
     stds = Float64[]
+end
+
+@with_kw mutable struct UniformSampler
+    min::Float64 = -2.
+    max::Float64 = 2.
+    n::Int = 10
+end
+
+@with_kw mutable struct GridSampler
+    min::Float64 = -2.
+    max::Float64 = 2.
+    n::Int = 10
+end
+
+sample(s::UniformSampler) = [rand(1) * (s.max-s.min) .+ s.min for i in 1:s.n]
+sample(s::GridSampler) = [rand(1) * (s.max-s.min) .+ s.min for i in 1:s.n]
+
+
+Isokann = Isokann3
+converging() = Isokann3(poweriter=1000, learniter=100, nmc=100, forcing=1, opt=ADAM(0.001), model=mlp([1,3,3], false), dt=.01)
+
+function run(iso::AIsokann; liveplot=false)
+    (;nx, nmc, poweriter, learniter, opt, model, forcing, dt, ls, stds) = iso
     q = -1.
     b = 0.
+    local plt
     for i in 1:poweriter
         chi = statify(model)
         ocp = ProblemOptChi5(chi=chi, q=q, b=b, forcing=forcing, dt=dt)
         #xs = [rand(1) * 4 .- 2 for i in 1:nx]
-        xs = map(x->[x], range(-2, 2, nx))
+        #xs = map(x->[x], range(-2, 2, nx))
+        xs = sample(UniformSampler(-2,2,nmc))
         target, std, λ, b = SK(ocp, xs, nmc)
         q = min(log(λ), 0)  # dont allow positive rates
 
@@ -67,9 +86,11 @@ function run(iso::Isokann)
             push!(stds, mean(std))
             push!(ls, loss)
         end
-        cbplot(model, ls, xs, target, stds, std, iso)
+        plt = cbplot(model, ls, xs, target, stds, std, iso)
+        liveplot && display(plt)
     end
-    model, ls
+    display(plt)
+    iso, (ls, stds)
 end
 
 """ single supervised learning iteration """
@@ -84,18 +105,26 @@ function learnstep!(model, xs, target, opt)
     loss
 end
 
-function string(iso::Isokann)
+function string(iso::AIsokann)
     (;nx, nmc, poweriter, learniter, opt, model, forcing, dt) = iso
     "nx=$nx nmc=$nmc piter=$poweriter liter=$learniter f=$forcing dt=$dt"
 end
 
 function cbplot(model, loss, xs, target, stds, std, iso)
     length(loss) % 1 == 0 || return
-    p1=plot(loss, yaxis=:log, title="loss", label="loss", legend=:bottomleft)
+    p1=plot(sqrt.(loss), yaxis=:log, title="loss", label="loss", legend=:bottomleft)
     plot!(p1, stds, label="std")
     p2=plot(x->model([x]), -5:.1:5, ylims=(-.1,1.1), title="fit", label="χ", legend=:best)
-    scatter!(p2, reduce(vcat, xs), target, yerror=std, label="SKχ")
-    plot(p1, p2, title=string(iso)) |> display
+    if length(xs) > 0
+        scatter!(p2, reduce(vcat, xs), target, yerror=std, label="SKχ")
+    end
+    plot(p1, p2, title=string(iso))
+end
+
+function plot_description(iso::AIsokann)
+    p=plot()
+    annotate!(string(iso))
+    p
 end
 
 

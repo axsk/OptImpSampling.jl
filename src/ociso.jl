@@ -13,7 +13,7 @@ using ForwardDiff
 using Parameters
 
 import Plots: plot
-import DifferentialEquations.solve
+#import DifferentialEquations.solve
 import StatsBase.mean_and_std
 using Parameters
 using Zygote
@@ -27,6 +27,14 @@ zgrad(f,x) = Zygote.gradient(f, x)[1]
 grad(f, x) = fgrad(f, x)
 
 doublewell(x) = ((x[1])^2 - 1) ^ 2
+function triplewell(u)
+    x, y = u
+    V =  (3/4 * exp(-x^2 - (y-1/3)^2)
+        - 3/4 * exp(-x^2 - (y-5/3)^2)
+        - 5/4 * exp(-(x-1)^2 - y^2)
+        - 5/4 * exp(-(x+1)^2 - y^2)
+        + 1/20 * x^4 + 1/20 * (y-1/3)^4)
+end
 
 abstract type ProblemOptControl end
 @with_kw mutable struct ProblemOptChi5{P, C} <: ProblemOptControl
@@ -40,6 +48,19 @@ abstract type ProblemOptControl end
     dt::Float64             = 0.01
     forcing::Float64        = 1.
 end
+
+@with_kw mutable struct ProblemOptChi9{N, P, C} <: ProblemOptControl
+    potential::P             = doublewell
+    T::Float64               = 1              # lag-time
+    σ::SMatrix{N,N, Float64} = SMatrix{1,1,Float64}(I)      # noise
+    chi::C                                   # chi function
+    q::Float64                               # rate of eigenfunction
+    b::Float64                               # scale * lowerbound(shift)
+    dt::Float64              = 0.01
+    forcing::Float64         = 1.
+end
+
+Sigma(sigma) = similar(sigma, size(sigma).+1 ...)
 
 derivatives(U, chi, x) = (; dU = Diff(U, x), dchi = Diff(chi, x))
 
@@ -86,25 +107,42 @@ end
 
 function SDEProblem(p::ProblemOptControl, x0)
     StochasticDiffEq.SDEProblem(controlled_drift, controlled_noise,
-        [x0; 0.], (0., p.T), p, noise_rate_prototype = p.Σ)
+        [x0; 0.], (0., p.T), p, noise_rate_prototype = Sigma(p.σ))
 end
 
-function solve(p::ProblemOptControl, x0; solver=SROCK2(), dt=p.dt)
+function msolve(p::ProblemOptControl, x0; solver=SROCK2(), dt=p.dt)
     prob = SDEProblem(p, x0)
     solve(prob, solver, dt=dt)
 end
 
-function evaluate(p::ProblemOptControl, x0::AbstractVector)
-    s = solve(p, x0)
-    x = s[end][1:end-1]
-    @assert all(isfinite.(x))
-    y = p.chi(x)
-    @assert isfinite(y)
-    e = y * exp(-s[end][end])  # - p.b
-    @assert isfinite(e)
-    return e
+function msolve(p::ProblemOptControl, x0, n, solver=SROCK2())
+    prob = SDEProblem(p, x0)  # custom SDEProblem constructor
+    #=
+    @time int = init(prob, solver, dt=p.dt)
+    map(1:n) do i
+        @time reinit!(int)
+        @time xg = solve!(int)[end] :: Vector{Float64}
+        xg[end] = exp(-xg[end])
+    end
+    =#
+    [solve(prob, solver, dt=p.dt)[end] for i in 1:n]
 end
 
+
+
+function evaluate(p::ProblemOptControl, x0::AbstractVector, n)
+    return map(msolve(p, x0, n)) do s
+        x = @view s[1:end-1]
+        @assert all(isfinite.(x))
+        y = p.chi(x)
+        @assert isfinite(y)
+        e = y * exp(-s[end])  # - p.b
+        @assert isfinite(e)
+        return e
+    end
+end
+
+evaluate(p::ProblemOptControl, x0::AbstractVector) = evaluate(p, x0, 1)[1]
 
 ## Plots
 
