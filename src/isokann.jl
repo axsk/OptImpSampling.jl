@@ -7,16 +7,17 @@ import Zygote
 
 function mlp(x=[1,3,3], sig=true)
     last = sig ? Dense(x[end], 1, σ) : Dense(x[end], 1)
-    Chain([Dense(x[i], x[i+1], σ) for i = 1:length(x)-1]..., last, first)
+    Chain([Dense(x[i], x[i+1], σ) for i = 1:length(x)-1]..., last, first)#, x->(x+1)/2)
 end
 
 # shiftscale which also scales stds and returns shift and rate
-function shiftscale!(ys, stds)
+function shiftscale!(ys, stds, eps = 0)
     a, b = extrema(ys)
-    ys .= (ys .- a) ./ (b - a)
+    ys .= (ys .- a) ./ (b - a) .+ eps
     stds ./= (b-a)
-    λ = b-a  # inferred eigenvalue
-    s = a / (a + 1 - b)  # inferred shift
+    λ = min(b-a, 3)  # inferred eigenvalue
+    s = a / (a + 1 - b) + eps  # inferred shift
+
     return λ, s
 end
 
@@ -72,16 +73,20 @@ function run(iso::AIsokann; liveplot=false)
     (;nx, nmc, poweriter, learniter, opt, model, forcing, dt, ls, stds) = iso
     q = -1.
     b = 0.
+    λ = 0
+    learnrate = 1
     local plt
     for i in 1:poweriter
+        xs = sample(UniformSampler(-2,2,nx))
         chi = statify(model)
         ocp = ProblemOptChi(chi=chi, q=q, b=b, forcing=forcing, dt=dt)
-        #xs = [rand(1) * 4 .- 2 for i in 1:nx]
-        #xs = map(x->[x], range(-2, 2, nx))
-        xs = sample(UniformSampler(-2,2,nx))
-        target, std, λ, b = SK(ocp, xs, nmc)
-        q = min(log(λ), 0)  # dont allow positive rates
+        target, std, λ1, b1 = SK(ocp, xs, nmc)  # new trajectories
 
+            λ = λ * (1-learnrate) + λ1 * learnrate
+            b = b * (1-learnrate) + b1 * learnrate
+            q = min(log(λ), 0)  # dont allow positive rates
+
+        # SGD Loop
         for j in 1:learniter
             loss = learnstep!(model, xs, target, opt)
             push!(stds, mean(std))

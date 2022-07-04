@@ -76,12 +76,19 @@ function control(p::ProblemOptChi{N}, x::AbstractVector, t) where {N}
     control(x, t, p.T, p.σ, p.chi, p.q, p.b, p.forcing, Val(N))
 end
 
-# optimal control assuming χ = λϕ + b with Kϕ = λϕ and λ = exp(tq)
+# optimal control assuming χ = ϕ + b with Kϕ = λϕ and λ = exp(tq)
 function control(x, t, T, σ, χ, q, b, forcescale, _::Val{N}) where {N}
     forcescale == 0. && return zero(SVector{N})
     @assert q <= 0
+    t>T && (t=T)
+    @assert t<=T
+
     λ = exp(q * (T-t))
     logψ(x) = log(λ*(χ(x)-b) + b)
+    if λ*(χ(x)-b) + b <= 0
+        @show χ(x), λ, b
+        @assert χ(x) > 0
+    end
     u = forcescale * σ' * grad(logψ, x)
     return u
 end
