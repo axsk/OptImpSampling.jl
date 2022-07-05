@@ -1,3 +1,5 @@
+export Isokann, run, mlp
+
 using Flux
 using Flux.Optimise: update!
 using Statistics
@@ -49,6 +51,20 @@ abstract type AIsokann end
     stds = Float64[]
 end
 
+@with_kw mutable struct Isokann4 <: AIsokann
+    nx = 10
+    nmc = 10
+    poweriter = 100
+    learniter = 10
+    opt = ADAM(0.01)
+    model = mlp()
+    forcing = 0.
+    dt = .01
+    ls = Float64[]
+    stds = Float64[]
+    potential = doublewell
+end
+
 @with_kw mutable struct UniformSampler
     min::Float64 = -2.
     max::Float64 = 2.
@@ -61,13 +77,14 @@ end
     n::Int = 10
 end
 
-sample(s::UniformSampler) = [rand(1) * (s.max-s.min) .+ s.min for i in 1:s.n]
-sample(s::GridSampler) = [rand(1) * (s.max-s.min) .+ s.min for i in 1:s.n]
+sample(s::UniformSampler, dim=1) = [rand(dim) * (s.max-s.min) .+ s.min for i in 1:s.n]
+sample(s::GridSampler, dim=1) = [rand(dim) * (s.max-s.min) .+ s.min for i in 1:s.n]
 
 
-Isokann = Isokann3
-converging() = Isokann3(poweriter=1000, learniter=100, nmc=100, forcing=1, opt=ADAM(0.001), model=mlp([1,3,3], false), dt=.01)
+Isokann = Isokann4
+converging() = Isokann(poweriter=1000, learniter=100, nmc=100, forcing=1, opt=ADAM(0.001), model=mlp([1,3,3], false), dt=.01)
 happy1() = Isokann(nx=30, poweriter=100, learniter=100, nmc=3, forcing=1., opt= ADAM(0.01), dt=0.01)
+basic2d() = Isokann(model=mlp([2,5,5]), potential=triplewell)
 
 function run(iso::AIsokann; liveplot=false)
     (;nx, nmc, poweriter, learniter, opt, model, forcing, dt, ls, stds) = iso
@@ -77,9 +94,9 @@ function run(iso::AIsokann; liveplot=false)
     learnrate = 1
     local plt
     for i in 1:poweriter
-        xs = sample(UniformSampler(-2,2,nx))
+        xs = sample(UniformSampler(-2,2,nx), 2)
         chi = statify(model)
-        ocp = ProblemOptChi(chi=chi, q=q, b=b, forcing=forcing, dt=dt)
+        ocp = ProblemOptChi(chi=chi, q=q, b=b, forcing=forcing, dt=dt, potential=iso.potential)
         target, std, λ1, b1 = SK(ocp, xs, nmc)  # new trajectories
 
             λ = λ * (1-learnrate) + λ1 * learnrate
@@ -102,6 +119,7 @@ end
 """ single supervised learning iteration """
 function learnstep!(model, xs, target, opt)
     ps = Flux.params(model)
+    xs
     loss, back = Zygote.pullback(ps) do
         predict = model.(xs)
         mean(abs2, target - predict)
@@ -118,11 +136,20 @@ end
 
 function cbplot(model, loss, xs, target, stds, std, iso)
     length(loss) % 1 == 0 || return
+
     p1=plot(sqrt.(loss), yaxis=:log, title="loss", label="loss", legend=:bottomleft)
     plot!(p1, stds, label="std")
-    p2=plot(x->model([x]), -5:.1:5, ylims=(-.1,1.1), title="fit", label="χ", legend=:best)
+    #dim(iso.potential) > 1 && return p1
+
     if length(xs) > 0
-        scatter!(p2, reduce(vcat, xs), target, yerror=std, label="SKχ")
+        if length(xs[1]) > 1  # hacky way to plot first dim
+            xs = map(x->x[1], xs)
+            p2 = contour(-2:.1:2, -2:.1:2, (x,y)->model([x,y]), fill=true)
+        else
+            p2=plot(x->model([x, 0]), -5:.1:5, ylims=(-.1,1.1), title="fit", label="χ", legend=:best)
+            scatter!(p2, reduce(vcat, xs), target, yerror=std, label="SKχ")
+        end
+
     end
     plot(p1, p2, title=string(iso))
 end

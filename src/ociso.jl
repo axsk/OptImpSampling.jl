@@ -2,6 +2,7 @@
 # we start with fin elems / linear interp. of the eigenfunction
 # and testing optimal sampling under the new criterion
 
+export ProblemOptChi, doublewell, triplewell, msolve, evaluate, mean_and_std
 
 #using Flux
 using DifferentialEquations
