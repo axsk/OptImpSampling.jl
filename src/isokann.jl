@@ -85,6 +85,7 @@ Isokann = Isokann4
 converging() = Isokann(poweriter=1000, learniter=100, nmc=100, forcing=1, opt=ADAM(0.001), model=mlp([1,3,3], false), dt=.01)
 happy1() = Isokann(nx=30, poweriter=100, learniter=100, nmc=3, forcing=1., opt= ADAM(0.01), dt=0.01)
 basic2d() = Isokann(model=mlp([2,5,5]), potential=triplewell)
+better2d() = Isokann(model=mlp([2,5,5,5]), potential=triplewell, forcing=1, dt=0.001)
 
 function run(iso::AIsokann; liveplot=false)
     (;nx, nmc, poweriter, learniter, opt, model, forcing, dt, ls, stds) = iso
@@ -143,8 +144,11 @@ function cbplot(model, loss, xs, target, stds, std, iso)
 
     if length(xs) > 0
         if length(xs[1]) > 1  # hacky way to plot first dim
-            xs = map(x->x[1], xs)
+
             p2 = contour(-2:.1:2, -2:.1:2, (x,y)->model([x,y]), fill=true)
+            @show l = map(model, xs) - target
+            xs = reduce(hcat, xs)'
+            scatter!(p2, xs[:,1], xs[:,2], markersize=l.^2 * 100)
         else
             p2=plot(x->model([x, 0]), -5:.1:5, ylims=(-.1,1.1), title="fit", label="χ", legend=:best)
             scatter!(p2, reduce(vcat, xs), target, yerror=std, label="SKχ")
