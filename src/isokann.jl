@@ -175,3 +175,23 @@ function statify(d::Dense)
     B = SVector{length(b)}(b)
     Dense(W, B, d.σ)
 end
+
+
+" subsample_uniform(ys, n)
+
+Return up to `n` indices into `ys` such that these elements each
+lie in one of `n` uniform partitions of the unit interval.
+Does return less indices if not all partitions were hit "
+function subsample_uniform(ys, n)
+    p = sortperm(ys)
+    s = ys[p]
+    picks = []
+    first = 1
+    for i in 1:n
+        last = findlast(x->x<=i/n, s)
+        (isnothing(last) || (last < first)) && continue  # no element found in box
+        push!(picks, rand(first:last))
+        first = last + 1
+    end
+    p[picks]
+end
