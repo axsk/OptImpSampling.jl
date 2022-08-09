@@ -98,6 +98,8 @@ function run(iso::AIsokann; liveplot=false)
         xs = sample(UniformSampler(-2,2,nx), 2)
         chi = statify(model)
         ocp = ProblemOptChi(chi=chi, q=q, b=b, forcing=forcing, dt=dt, potential=iso.potential)
+
+        #xxs = humboldtsample(xs, ocp, 2)
         target, std, λ1, b1 = SK(ocp, xs, nmc)  # new trajectories
 
             λ = λ * (1-learnrate) + λ1 * learnrate
@@ -194,4 +196,22 @@ function subsample_uniform(ys, n)
         first = last + 1
     end
     p[picks]
+end
+
+
+function humboldtsample(xs, ocp, branch)
+    ocp = deepcopy(ocp)
+    ocp.forcing = 0.
+    nxs = copy(xs)
+    for x in xs
+        for i in 1:branch
+            s = msolve(ocp, x)[1:end-1]
+            push!(nxs, s)
+        end
+    end
+
+    ys = map(ocp.chi, nxs)
+    is = subsample_uniform(ys, length(xs))
+
+    return xs[is]
 end
