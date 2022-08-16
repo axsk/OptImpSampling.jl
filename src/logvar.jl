@@ -4,7 +4,6 @@ using Flux, Zygote
 using DifferentialEquations, StochasticDiffEq, SciMLSensitivity
 
 # control problem problem
-
 dim = 1
 sigma(X, t) = ones(dim,dim)
 Sigma(X) = similar(X, size(X).+1 ...)
@@ -13,9 +12,9 @@ v(X, t) = zero(X)
 u(X, t, p) = anneval(p, X)
 f(x, T) = 1.
 sigma(X::SVector{N, T}, t) where {N, T} = SMatrix{N, N, T}(I)
+x0 = @SVector [0.]
 
 # neural network modeling force u
-
 ann = Chain(Dense(1,10,tanh), Dense(10,1))
 anneval(p, X) = re(p)(X) # evaluation at X with parameters p
 p1,re = Flux.destructure(ann)
@@ -40,12 +39,34 @@ end
 function noise(s::SVector, p, t)
     N = length(s) - 1
     X = s[SOneTo(N)]
-    ds = zero(MMatrix{N+1,N+1})
 
-    ds[1:N, 1:N] = sigma(X, t)
-    ds[N+1, 1:N] .= u(X, t, p)
+    dx = sigma(X, t)
+    dy = u(X, t, p)
+    z  = zero(SVector{N+1})
 
-    SMatrix(ds)
+    ds = hcat(vcat(dx, dy), z)  # non mutating way to construct the noise matrix
+    SMatrix{N+1, N+1}(ds)
+end
+
+## using Zygote.Buffer to allow mutation of array, doesnt help though
+function noise_buffered(s::SVector, p, t)
+    N = length(s) - 1
+    X = s[SOneTo(N)]
+    #ds = zero(MMatrix{N+1,N+1})
+    @show uu = u(X, t, p)
+    ds = Zygote.Buffer(s, N+1, N+1) # do we need to zero this?
+    ss = sigma(X, t)
+    for i in 1:N
+        for j in 1:N
+            ds[i, j] = ss[i, j]
+        end
+    end
+
+
+    for j in 1:N
+        ds[N+1, j] = uu[j]
+    end
+    SMatrix{N+1,N+1}(copy(ds))
 end
 
 # default problem
@@ -55,22 +76,28 @@ function LogVarProblem(x0::StaticArray, T, p)
     s = vcat(x0, 0)
     noise_proto = noise(s, p, 0)
     SDEProblem{false}(drift, noise, s, T, p, noise_rate_prototype = noise_proto)
-    #ODEProblem{false}(drift, s, T, p)
 end
 
 # normal solve works
 function msolve()
     p = LogVarProblem()
-    alg = isa(p, ODEProblem) ? Tsit5() : EM()
-    s = solve(p, alg, dt=.01)
+    alg = EM()
+    salg = InterpolatingAdjoint(checkpointing=true)
+    s = solve(p, alg, dt=.01, sensealg=salg)[end][end]
 end
 
 # sensivity doesnt
 function msens()
     p = LogVarProblem()
-    Zygote.gradient(()->msolve()[end][2], ps)
+    Zygote.gradient(()->msolve(), ps)
 end
 
+function test()
+    msens()
+end
+
+
+#=
 ### hence we compute the adjoint / derivatives manually :|
 
 function AdjointLogVarProblem(x0::StaticArray, T, force, dudp)
@@ -108,7 +135,6 @@ function AdjointLogVarProblem(x0::StaticArray, T, force, dudp)
     SDEProblem{false}(ddrift, dnoise, s, T, noise_rate_prototype = noise_proto)
 end
 
-
 # return dY/dp (x) where Y is the cost functional and p the ann parameters
 # next step would be to define the chain rule for this and use it in the variance minim.
 function adjoint(x=rand(1), par=p1)
@@ -137,7 +163,7 @@ function compare_static_mutating()
 end
 
 
-""" mutating variant """
+""" mutating variant, was around 10x slower """
 function LogVarProblemMutating(x0, T)
 
     function drift(ds, s, p, t)
@@ -165,3 +191,5 @@ function LogVarProblemMutating(x0, T)
 
     SDEProblem{true}(drift, noise, [x0; 0], (0, T), p, noise_rate_prototype = Sigma(x0))
 end
+
+=#
