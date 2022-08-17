@@ -2,33 +2,46 @@ using LinearAlgebra
 using StaticArrays
 using Flux, Zygote
 using DifferentialEquations, StochasticDiffEq, SciMLSensitivity
+using StatsBase
 
 # control problem problem
 dim = 1
 sigma(X, t) = ones(dim,dim)
-Sigma(X) = similar(X, size(X).+1 ...)
 b(X, t) = zero(X)
 v(X, t) = zero(X)
 u(X, t, p) = anneval(p, X)
+u(X::SVector{T,S}, t, p) where {T,S} = SVector{T,S}(anneval(p, X)) :: SVector{T,S}
 f(x, T) = 1.
 sigma(X::SVector{N, T}, t) where {N, T} = SMatrix{N, N, T}(I)
-x0 = @SVector [0.]
+x0 = [0.]
+
+struct UModel{T, U, V}
+    ann::T
+    p::U
+    re::V
+end
+
+UModel(n) = UModel(Chain(Dense(1,10,tanh), Dense(10,1)))
+UModel(ann::Chain) = UModel(ann, destructure(ann)...)
+(u::UModel)(x, t) = u.re(u.p)(x)
+params(u::UModel) = Flux.params(u.ann)
 
 # neural network modeling force u
 ann = Chain(Dense(1,10,tanh), Dense(10,1))
 anneval(p, X) = re(p)(X) # evaluation at X with parameters p
-p1,re = Flux.destructure(ann)
+p1, re = Flux.destructure(ann)
 ps = Flux.params(p1)
 
-# went for immutable SVectors since they were much faster in normal sde solve
-function drift(s::SVector, p, t)
-    N = length(s) - 1
-    X = s[SOneTo(N)]  # indexing like this to keep it an SVector
+allbutlast(s) = s[1:end-1]
+allbutlast(s::SVector) = s[SOneTo(length(s)-1)]
+
+function drift(s, p, t)
+    X = allbutlast(s)
     let b = b(X, t),  # is this beautiful or horrible :D?
-        v = v(X, t),
-        u = u(X, t, p),
-        σ = sigma(X, t),
-        f = f(X, t)
+            v = v(X, t),
+            u = u(X, t, p),
+            σ = sigma(X, t),
+            f = f(X, t)
 
         dX = b + σ * v  # v controlled process
         dY = - f - dot(u, v) + dot(u, u) / 2  # runnig cost and u-v-W reweighting
@@ -36,65 +49,86 @@ function drift(s::SVector, p, t)
     end
 end
 
-function noise(s::SVector, p, t)
-    N = length(s) - 1
-    X = s[SOneTo(N)]
-
+function noise(s, p, t)
+    X = allbutlast(s)
     dx = sigma(X, t)
-    dy = u(X, t, p)
-    z  = zero(SVector{N+1})
-
-    ds = hcat(vcat(dx, dy), z)  # non mutating way to construct the noise matrix
-    SMatrix{N+1, N+1}(ds)
+    dy = u(X, t, p)'
+    dxy = vcat(dx, dy)
+    ds = hcat(dxy, zeros(length(s)))
 end
 
-## using Zygote.Buffer to allow mutation of array, doesnt help though
-function noise_buffered(s::SVector, p, t)
-    N = length(s) - 1
-    X = s[SOneTo(N)]
-    #ds = zero(MMatrix{N+1,N+1})
-    @show uu = u(X, t, p)
-    ds = Zygote.Buffer(s, N+1, N+1) # do we need to zero this?
-    ss = sigma(X, t)
-    for i in 1:N
-        for j in 1:N
-            ds[i, j] = ss[i, j]
-        end
-    end
-
-
-    for j in 1:N
-        ds[N+1, j] = uu[j]
-    end
-    SMatrix{N+1,N+1}(copy(ds))
-end
-
-# default problem
-LogVarProblem(x0=[0.], T=1., p=p1) = LogVarProblem(SVector(x0...), T, p)
-
-function LogVarProblem(x0::StaticArray, T, p)
+function LogVarProblem(x0=x0, T=1., p=p1)
     s = vcat(x0, 0)
-    noise_proto = noise(s, p, 0)
+    noise_proto = noise(s, p, 0.)
     SDEProblem{false}(drift, noise, s, T, p, noise_rate_prototype = noise_proto)
 end
 
 # normal solve works
-function msolve()
-    p = LogVarProblem()
+function msolve(;salg=InterpolatingAdjoint(autojacvec=ReverseDiffVJP(), noisemixing=true), x0=x0)
+    p = LogVarProblem(x0)
     alg = EM()
-    salg = InterpolatingAdjoint(checkpointing=true)
-    s = solve(p, alg, dt=.01, sensealg=salg)[end][end]
+    s = solve(p, alg, sensealg=salg, dt=.01)[end][end]
 end
 
 # sensivity doesnt
-function msens()
+function msens(;kwargs...)
     p = LogVarProblem()
-    Zygote.gradient(()->msolve(), ps)
+    Zygote.gradient(()->msolve(;kwargs...), ps) |> first
+end
+
+function logvar(n=100; kwargs...)
+    var(msolve() for i in 1:n)
+end
+
+function dlogvar()
+    Zygote.gradient(()->logvar(), ps) |> first
+end
+
+function learnoptcontrol()
+    data = Iterators.repeated((), 100)
+    opt = ADAM(0.1)
+    Flux.train!(logvar, ps, data, opt)
 end
 
 function test()
-    msens()
+    senses = [BacksolveAdjoint, InterpolatingAdjoint, QuadratureAdjoint,
+    ReverseDiffAdjoint,
+    ForwardDiffSensitivity,
+    ForwardSensitivity,
+    ZygoteAdjoint,
+    TrackerAdjoint]
+    jvs = [false, true, ZygoteVJP(), ReverseDiffVJP(true), ReverseDiffVJP(), TrackerVJP()]
+    for s in senses
+        for j in jvs
+            @time try
+                msens(salg=s(autojacvec=j))
+                println("$s $j okay")
+            catch e
+                println("  $s $j fail")
+            end
+        end
+    end
 end
+
+#=
+
+ReverseDiffAdjoint(): ERROR: MethodError: no method matching *(::Vector{Float64}, ::Vector{Float64})
+ZygoteAdjoint(): try catch in EM()
+ForwardDiffSensitivity(): 0.02s
+QuadratureAdjoint(): Incompatible problem+solver pairing.
+InterpolatingAdjoint(): 0.05s
+BacksolveAdjoint(): 0.1s
+BacksolveAdjoint(autojacvec=false): 0.08
+BacksolveAdjoint(autojacvec=true): type Nothing has no field t
+BacksolveAdjoint(autojacvec=ZygoteVJP):
+BacksolveAdjoint(autojacvec=ReverseDiffVJP()): ERROR: MethodError: no method matching mul!(::Vector{Float64}, ::Matrix{Float64}, ::Adjoint{Float64, Vector{Float64}}, ::Bool, ::Bool)
+InterpolatingAdjoint(autojacvec=ZygoteVJP())): 0.05
+InterpolatingAdjoint(autojacvec=ReverseDiffVJP()): 0.03
+InterpolatingAdjoint(autojacvec=ReverseDiffVJP(true))): no method matching compile(::Nothing)
+
+
+
+=#
 
 
 #=
@@ -188,7 +222,7 @@ function LogVarProblemMutating(x0, T)
         dWY = ds[end, 1:end-1] .= u(X, t)
         nothing
     end
-
+    Sigma(X) = similar(X, size(X).+1 ...)
     SDEProblem{true}(drift, noise, [x0; 0], (0, T), p, noise_rate_prototype = Sigma(x0))
 end
 

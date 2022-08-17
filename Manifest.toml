@@ -2,13 +2,19 @@
 
 julia_version = "1.8.0-rc4"
 manifest_format = "2.0"
-project_hash = "5bc03e59c501e69426abad9bb277595c94bbbe08"
+project_hash = "6bac4cf0ff783ca0f4041ebf1cb7ba6197c8e257"
 
 [[deps.ATK_jll]]
 deps = ["Artifacts", "Glib_jll", "JLLWrappers", "Libdl", "Pkg"]
 git-tree-sha1 = "58c36d8a1beeb12d63921bcfaa674baf30a1140e"
 uuid = "7b86fcea-f67b-53e1-809c-8f1719c154e8"
 version = "2.36.1+0"
+
+[[deps.AbbreviatedStackTraces]]
+deps = ["Distributed", "REPL"]
+git-tree-sha1 = "38b745eaec0549de7d6673855e3ad9b863fbf694"
+uuid = "ac637c84-cc71-43bf-9c33-c1b4316be3d4"
+version = "0.1.2"
 
 [[deps.AbstractDifferentiation]]
 deps = ["ChainRulesCore", "Compat", "ExprTools", "LinearAlgebra", "Requires"]
