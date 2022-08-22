@@ -1,25 +1,30 @@
 using LinearAlgebra
 using StaticArrays
-using Flux, Zygote
+#using Flux
+using Zygote
 using DifferentialEquations, StochasticDiffEq, SciMLSensitivity
 using StatsBase
+using Lux, Random
+using ReverseDiff
 
 # control problem problem
-dim = 1
-sigma(X, t) = ones(dim,dim)
+sigma(X, t) = collect(I(length(X)))
 b(X, t) = zero(X)
 v(X, t) = zero(X)
-#u(X::SVector{T,S}, t, p) where {T,S} = SVector{T,S}(anneval(p, X)) :: SVector{T,S}
 f(x, T) = 1.
 sigma(X::SVector{N, T}, t) where {N, T} = SMatrix{N, N, T}(I)
-x0 = [0.]
 
-
-# neural network modeling force u
-const u = Chain(Dense(1,10,tanh), Dense(10,1))
+function mydense(in=1)
+    m = Lux.Chain(Lux.Dense(in,10,tanh), Lux.Dense(10,1))
+    rng = Random.default_rng()
+    ps, st = Lux.setup(rng, m)
+    return m, ps, st
+end
 
 allbutlast(s) = s[1:end-1]
-allbutlast(s::SVector) = s[SOneTo(length(s)-1)]::SVector
+#allbutlast(s::SVector) = s[SOneTo(length(s)-1)]::SVector
+#allbutlast(s::ReverseDiff.TrackedArray) = similar_type(s, Size(length(s)-1))(s[1:end-1])
+#allbutlast(s::SVector) = similar_type(s, Size(length(s)-1))(s[1:end-1])
 
 function drift(xy, t, b, sigma, u, v, f)
     X = allbutlast(xy)
@@ -35,36 +40,49 @@ function drift(xy, t, b, sigma, u, v, f)
     end
 end
 
+allbutlast(s::SVector) = similar_type(s, Size(length(s)-1))(s[1:end-1])
+
 function noise(xy, t, sigma, u)
-    X = allbutlast(xy)
-    dx = sigma(X, t)
-    dy = u(X, t)'
-    dxy = vcat(dx, dy)
-    ds = hcat(dxy, zeros(length(xy)))
+    @show typeof(xy)
+    X = allbutlast(xy) # xy[1:end-1], but ::SVector
+    @show typeof(X)
+    dx = sigma(X, t) # SMatrix{1,1, Float64}
+    uu = u(X,t)  # u is a Lux Chain, returning a Vector{Float64}
+    dy = similar_type(X, Size(size(X)))(uu) # converting to SVector
+    dxy = vcat(dx, dy')
+    ds = hcat(dxy, zero(dxy)) # returns SMatrix
 end
 
 # stop after first component of trajectory crosses lower or upper bound
 termination(ub) = ContinuousCallback((u,t,int)->(u[1]-lb) * (ub-u[1]), terminate!)
 
-function LogVarProblem(x0=x0, T=1., u::Chain=u)
+function LogVarProblem(x0=@SVector([0.]), T=1., luxmodel=mydense())
+    model, ps, st = luxmodel
     xy0 = vcat(x0, 0.)
-    p, re = Flux.destructure(u)
-    noise_proto = noise(xy0, 0., sigma, (X,t) -> u(X))
-    _drift(xy, p, t) = drift(xy, t, b, sigma, (X,t) -> re(p)(X), v, f)
-    _noise(xy, p, t) = noise(xy, t, sigma, (X,t) -> re(p)(X))
+
+    p = Lux.ComponentArray(ps)
+    u(p) = (X, t) -> model(X, p, st)[1]  # ::: (X,t) -> R
+
+    noise_proto = noise(xy0, 0., sigma, u(p))
+    _drift(xy, p, t) = drift(xy, t, b, sigma, u(p), v, f)
+    _noise(xy, p, t) = noise(xy, t, sigma, u(p))
     # note that we store the nn params `p` in the SDEProblem for later AD
-    SDEProblem{false}(_drift, _noise, xy0, T, p, noise_rate_prototype = noise_proto)
+    SDEProblem(_drift, _noise, xy0, T, p, noise_rate_prototype = noise_proto)
 end
 
-function msolve(p ;salg=InterpolatingAdjoint(autojacvec=ReverseDiffVJP(), noisemixing=true), dt=0.01)
-    s = solve(p, EM(), sensealg=salg, dt=dt)[end][end]
+## @benchmark msolve(l::Prob{Vector,  Lux.Chain}) = 401 us
+## @benchmark msolve(l::Prob{SVector, Lux.Chain}) = 163 us
+function msolve(prob ;ps=prob.p, salg=InterpolatingAdjoint(autojacvec=ReverseDiffVJP(), noisemixing=true), dt=0.01)
+    prob = remake(prob, p=ps)
+    s = solve(prob, EM(), sensealg=salg, dt=dt)[end][end]
 end
 
 
-## @benchmark msens(ls::Prob{SVector}) = 37ms
-## @benchmark msens(l::Prob{Vector}) = 38ms
-function msens(p;kwargs...)
-    Zygote.gradient(()->msolve(p;kwargs...), Flux.params(p.p)) |> first
+## @benchmark msens(ls::Prob{SVector, Flux.Chain}) = 37ms
+## @benchmark msens(l::Prob{Vector, Flux.Chain}) = 38ms
+## @benchmark msens(l::Prob{Vector, Lux.Chain}) = 25ms
+function msens(prob; kwargs...)
+    Zygote.gradient(ps->msolve(prob;ps=ps, kwargs...), prob.p) |> first
 end
 
 function benchmark()
@@ -91,7 +109,7 @@ function learnoptcontrol(p, n, m)
     Flux.train!(()->logvar(p,n), Flux.params(p.p), data, opt)
 end
 
-function test()
+function test_ad_systems()
     senses = [BacksolveAdjoint, InterpolatingAdjoint, QuadratureAdjoint,
     ReverseDiffAdjoint,
     ForwardDiffSensitivity,
