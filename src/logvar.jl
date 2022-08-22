@@ -9,37 +9,23 @@ dim = 1
 sigma(X, t) = ones(dim,dim)
 b(X, t) = zero(X)
 v(X, t) = zero(X)
-u(X, t, p) = anneval(p, X)
-u(X::SVector{T,S}, t, p) where {T,S} = SVector{T,S}(anneval(p, X)) :: SVector{T,S}
+#u(X::SVector{T,S}, t, p) where {T,S} = SVector{T,S}(anneval(p, X)) :: SVector{T,S}
 f(x, T) = 1.
 sigma(X::SVector{N, T}, t) where {N, T} = SMatrix{N, N, T}(I)
 x0 = [0.]
 
-struct UModel{T, U, V}
-    ann::T
-    p::U
-    re::V
-end
-
-UModel(n) = UModel(Chain(Dense(1,10,tanh), Dense(10,1)))
-UModel(ann::Chain) = UModel(ann, destructure(ann)...)
-(u::UModel)(x, t) = u.re(u.p)(x)
-params(u::UModel) = Flux.params(u.ann)
 
 # neural network modeling force u
-ann = Chain(Dense(1,10,tanh), Dense(10,1))
-anneval(p, X) = re(p)(X) # evaluation at X with parameters p
-p1, re = Flux.destructure(ann)
-ps = Flux.params(p1)
+const u = Chain(Dense(1,10,tanh), Dense(10,1))
 
 allbutlast(s) = s[1:end-1]
-allbutlast(s::SVector) = s[SOneTo(length(s)-1)]
+allbutlast(s::SVector) = s[SOneTo(length(s)-1)]::SVector
 
-function drift(s, p, t)
-    X = allbutlast(s)
+function drift(xy, t, b, sigma, u, v, f)
+    X = allbutlast(xy)
     let b = b(X, t),  # is this beautiful or horrible :D?
             v = v(X, t),
-            u = u(X, t, p),
+            u = u(X, t),
             σ = sigma(X, t),
             f = f(X, t)
 
@@ -49,45 +35,60 @@ function drift(s, p, t)
     end
 end
 
-function noise(s, p, t)
-    X = allbutlast(s)
+function noise(xy, t, sigma, u)
+    X = allbutlast(xy)
     dx = sigma(X, t)
-    dy = u(X, t, p)'
+    dy = u(X, t)'
     dxy = vcat(dx, dy)
-    ds = hcat(dxy, zeros(length(s)))
+    ds = hcat(dxy, zeros(length(xy)))
 end
 
-function LogVarProblem(x0=x0, T=1., p=p1)
-    s = vcat(x0, 0)
-    noise_proto = noise(s, p, 0.)
-    SDEProblem{false}(drift, noise, s, T, p, noise_rate_prototype = noise_proto)
+# stop after first component of trajectory crosses lower or upper bound
+termination(ub) = ContinuousCallback((u,t,int)->(u[1]-lb) * (ub-u[1]), terminate!)
+
+function LogVarProblem(x0=x0, T=1., u::Chain=u)
+    xy0 = vcat(x0, 0.)
+    p, re = Flux.destructure(u)
+    noise_proto = noise(xy0, 0., sigma, (X,t) -> u(X))
+    _drift(xy, p, t) = drift(xy, t, b, sigma, (X,t) -> re(p)(X), v, f)
+    _noise(xy, p, t) = noise(xy, t, sigma, (X,t) -> re(p)(X))
+    # note that we store the nn params `p` in the SDEProblem for later AD
+    SDEProblem{false}(_drift, _noise, xy0, T, p, noise_rate_prototype = noise_proto)
 end
 
-# normal solve works
-function msolve(;salg=InterpolatingAdjoint(autojacvec=ReverseDiffVJP(), noisemixing=true), x0=x0)
-    p = LogVarProblem(x0)
-    alg = EM()
-    s = solve(p, alg, sensealg=salg, dt=.01)[end][end]
+function msolve(p ;salg=InterpolatingAdjoint(autojacvec=ReverseDiffVJP(), noisemixing=true), dt=0.01)
+    s = solve(p, EM(), sensealg=salg, dt=dt)[end][end]
 end
 
-# sensivity doesnt
-function msens(;kwargs...)
-    p = LogVarProblem()
-    Zygote.gradient(()->msolve(;kwargs...), ps) |> first
+
+## @benchmark msens(ls::Prob{SVector}) = 37ms
+## @benchmark msens(l::Prob{Vector}) = 38ms
+function msens(p;kwargs...)
+    Zygote.gradient(()->msolve(p;kwargs...), Flux.params(p.p)) |> first
 end
 
-function logvar(n=100; kwargs...)
-    var(msolve() for i in 1:n)
+function benchmark()
+    l = LogVarProblem([0.])
+    ls = LogVarProblem(@SVector [0.])
+
+    @show @benchmark msolve(l)
+    @show @benchmark msolve(ls)
+    @show @benchmark msens(l)
+    @show @benchmark msens(ls)
 end
 
-function dlogvar()
-    Zygote.gradient(()->logvar(), ps) |> first
+function logvar(p, n=100)
+    var(msolve(p) for i in 1:n)
 end
 
-function learnoptcontrol()
-    data = Iterators.repeated((), 100)
+function dlogvar(p, n=100)
+    Zygote.gradient(()->logvar(p, n), Flux.params(p.p)) |> first
+end
+
+function learnoptcontrol(p, n, m)
+    data = Iterators.repeated((), m)
     opt = ADAM(0.1)
-    Flux.train!(logvar, ps, data, opt)
+    Flux.train!(()->logvar(p,n), Flux.params(p.p), data, opt)
 end
 
 function test()
