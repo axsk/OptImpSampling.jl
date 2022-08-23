@@ -26,20 +26,6 @@ function mydense(in=1)
     return m, ps, st
 end
 
-function drift(xy, t, b, sigma, u, v, f)
-    X = allbutlast(xy)
-    let b = b(X, t),  # is this beautiful or horrible :D?
-            v = v(X, t),
-            u = u(X, t),
-            σ = sigma(X, t),
-            f = f(X, t)
-
-        dX = b + σ * v  # v controlled process
-        dY = - f - dot(u, v) + dot(u, u) / 2  # runnig cost and u-v-W reweighting
-        vcat(dX, dY)
-    end
-end
-
 function drift(dxy, xy, t, b, sigma, u, v, f)
     #dxy[:] = drift(xy,t,b,sigma,u,v,f)
     X = @view xy[1:end-1]
@@ -62,88 +48,45 @@ function noise(dxy, xy, t, sigma, u)
     dxy[end, 1:end-1] .= u(X,t)
 end
 
-allbutlast(s) = s[1:end-1]
-allbutlast(s::SVector) = similar_type(s, Size(length(s)-1))(s[1:end-1]) # xy[1:end-1], but ::SVector
-statify(X, x) = similar_type(X, Size(size(X)))(x)
-
-""" construct the noise matrix consisting of the blocks
-( Σ(X,t)  0 )
-( u'(X,t) 0 )
-"""
-function noise(xy, t, sigma, u)
-    #@show typeof(xy)
-    X = allbutlast(xy)
-    #@show typeof(X)
-    dx = sigma(X, t) # SMatrix{1,1, Float64}
-    uu = u(X,t)  # u is a Lux Chain, returning a Vector{Float64}
-    dy = statify(X,uu) # converting to SVector
-    dxy = vcat(dx, dy')
-    ds = hcat(dxy, zero(dxy)) # returns SMatrix
-end
-
 # stop after first component of trajectory crosses lower or upper bound
 termination(ub) = ContinuousCallback((u,t,int)->(u[1]-lb) * (ub-u[1]), terminate!)
 
-function LogVarProblem(x0=@SVector([0.]), T=1., luxmodel=mydense())
+function LogVarProblem(x0=[0.], T=1., luxmodel=mydense())
     model, ps, st = luxmodel
     xy0 = vcat(x0, 0.)
 
     p = Lux.ComponentArray(ps)
-    u(p) = (X, t) -> model(X, p, st)[1]  # ::: (X,t) -> R
-
-    noise_proto = noise(xy0, 0., sigma, u(p))
-    _drift(xy, p, t) = drift(xy, t, b, sigma, u(p), v, f)
-    _noise(xy, p, t) = noise(xy, t, sigma, u(p))
-    # note that we store the nn params `p` in the SDEProblem for later AD
-    SDEProblem(_drift, _noise, xy0, T, p, noise_rate_prototype = noise_proto)
-end
-
-
-function MLogVarProblem(x0=@MVector([0.]), T=1., luxmodel=mydense())
-    model, ps, st = luxmodel
-    xy0 = vcat(x0, 0.)
-
-    p = Lux.ComponentArray(ps)
-    u(p) = (X, t) -> model(X, p, st)[1]  # ::: (X,t) -> R
-
-    noise_proto = noise(xy0, 0., sigma, u(p))
+    u(pp) = (X, t) -> model(X, pp, st)[1]  # ::: (X,t) -> R
     _drift(dxy, xy, p, t) = drift(dxy, xy, t, b, sigma, u(p), v, f)
     _noise(dxy, xy, p, t) = noise(dxy, xy, t, sigma, u(p))
-    # note that we store the nn params `p` in the SDEProblem for later AD
-    SDEProblem(_drift, _noise, xy0, T, p, noise_rate_prototype = noise_proto)
+
+    SDEProblem(_drift, _noise, xy0, T, p, noise_rate_prototype = zeros(length(xy0), length(xy0)))
 end
 
 ## @benchmark msolve(l::Prob{Vector,  Lux.Chain}) = 401 us
 ## @benchmark msolve(l::Prob{SVector, Lux.Chain}) = 163 us
 function msolve(prob ;ps=prob.p, salg=InterpolatingAdjoint(autojacvec=ReverseDiffVJP(), noisemixing=true), dt=0.01)
     prob = remake(prob, p=ps)
-    s = solve(prob, EM(), sensealg=salg, dt=dt)[end][end]
+    s = solve(prob, EM(), sensealg=salg, dt=dt)
+    s[end][end]
 end
 
-
-## @benchmark msens(ls::Prob{SVector, Flux.Chain}) = 37ms
-## @benchmark msens(l::Prob{Vector, Flux.Chain}) = 38ms
-## @benchmark msens(l::Prob{Vector, Lux.Chain}) = 25ms
 function msens(prob; kwargs...)
-    Zygote.gradient(ps->msolve(prob;ps=ps, kwargs...), prob.p) |> first
+    Zygote.gradient(psx->msolve(prob;ps=psx, kwargs...), prob.p) |> first
 end
 
 function benchmark()
-    l = LogVarProblem([0.])
-    ls = LogVarProblem(@SVector [0.])
-
-    @show @benchmark msolve(l)
-    @show @benchmark msolve(ls)
-    @show @benchmark msens(l)
-    @show @benchmark msens(ls)
+    l = LogVarProblem()
+    @show @benchmark msolve($l)
+    @show @benchmark msens($l)
 end
 
-function logvar(p, n=100)
-    var(msolve(p) for i in 1:n)
+function logvar(prob; ps=prob.p, n=100)
+    sum(msolve(prob, ps=ps) for i in 1:n)
 end
 
-function dlogvar(p, n=100)
-    Zygote.gradient(()->logvar(p, n), Flux.params(p.p)) |> first
+function dlogvar(prob, n=100)
+    Zygote.gradient(psx->logvar(prob; ps=psx, n=n), prob.p)[1]
 end
 
 function learnoptcontrol(p, n, m)
@@ -152,6 +95,7 @@ function learnoptcontrol(p, n, m)
     Flux.train!(()->logvar(p,n), Flux.params(p.p), data, opt)
 end
 
+#=
 function test_ad_systems()
     senses = [BacksolveAdjoint, InterpolatingAdjoint, QuadratureAdjoint,
     ReverseDiffAdjoint,
@@ -178,7 +122,13 @@ function test_ad_systems()
         end
     end
 end
+=#
 
+
+## @benchmark msens(ls::Prob{SVector, Flux.Chain}) = 37ms
+## @benchmark msens(l::Prob{Vector, Flux.Chain}) = 38ms
+## @benchmark msens(l::Prob{Vector, Lux.Chain}) = 25ms
+q
 #=
 Trial(84.003 ms) oop Array InterpolatingAdjoint ZygoteVJP(false)
 Trial(23.119 ms) oop Array InterpolatingAdjoint ReverseDiffVJP{false}()
