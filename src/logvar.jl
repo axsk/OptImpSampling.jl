@@ -1,17 +1,22 @@
 using LinearAlgebra
 using StaticArrays
-#using Flux
 using Zygote
 using DifferentialEquations, StochasticDiffEq, SciMLSensitivity
 using StatsBase
 using Lux, Random
 using ReverseDiff
 
+# dX = b + σ * v + σ * dB
+# dY = -f - u'v + u'u/2
+# Goal: find u sth that Var[log(Y(T))] is minimized (=0)
+# Motivation: The optimal u-controlled process gives is a 0-variance estimator for
+# W = ∫ f(X(t)) dt =
+
 # control problem problem
-sigma(X, t) = collect(I(length(X)))
 b(X, t) = zero(X)
 v(X, t) = zero(X)
 f(x, T) = 1.
+sigma(X, t) = collect(I(length(X)))
 sigma(X::SVector{N, T}, t) where {N, T} = SMatrix{N, N, T}(I)
 
 function mydense(in=1)
@@ -21,86 +26,67 @@ function mydense(in=1)
     return m, ps, st
 end
 
-allbutlast(s) = s[1:end-1]
-#allbutlast(s::SVector) = s[SOneTo(length(s)-1)]::SVector
-#allbutlast(s::ReverseDiff.TrackedArray) = similar_type(s, Size(length(s)-1))(s[1:end-1])
-#allbutlast(s::SVector) = similar_type(s, Size(length(s)-1))(s[1:end-1])
-
-function drift(xy, t, b, sigma, u, v, f)
-    X = allbutlast(xy)
+function drift(dxy, xy, t, b, sigma, u, v, f)
+    #dxy[:] = drift(xy,t,b,sigma,u,v,f)
+    X = @view xy[1:end-1]
     let b = b(X, t),  # is this beautiful or horrible :D?
-            v = v(X, t),
-            u = u(X, t),
-            σ = sigma(X, t),
-            f = f(X, t)
+        v = v(X, t),
+        u = u(X, t),
+        σ = sigma(X, t),
+        f = f(X, t)
 
-        dX = b + σ * v  # v controlled process
-        dY = - f - dot(u, v) + dot(u, u) / 2  # runnig cost and u-v-W reweighting
-        vcat(dX, dY)
+        dxy[1:end-1] .= b + σ * v
+        dxy[end] = - f - dot(u, v) + dot(u, u) / 2
     end
 end
 
-allbutlast(s::SVector) = similar_type(s, Size(length(s)-1))(s[1:end-1])
-
-function noise(xy, t, sigma, u)
-    @show typeof(xy)
-    X = allbutlast(xy) # xy[1:end-1], but ::SVector
-    @show typeof(X)
-    dx = sigma(X, t) # SMatrix{1,1, Float64}
-    uu = u(X,t)  # u is a Lux Chain, returning a Vector{Float64}
-    dy = similar_type(X, Size(size(X)))(uu) # converting to SVector
-    dxy = vcat(dx, dy')
-    ds = hcat(dxy, zero(dxy)) # returns SMatrix
+function noise(dxy, xy, t, sigma, u)
+    #dxy .= noise(xy, t, sigma, u)
+    dxy .= 0
+    X = @view xy[1:end-1]
+    dxy[1:end-1, 1:end-1] .= sigma(X, t)
+    dxy[end, 1:end-1] .= u(X,t)
 end
 
 # stop after first component of trajectory crosses lower or upper bound
 termination(ub) = ContinuousCallback((u,t,int)->(u[1]-lb) * (ub-u[1]), terminate!)
 
-function LogVarProblem(x0=@SVector([0.]), T=1., luxmodel=mydense())
+function LogVarProblem(x0=[0.], T=1., luxmodel=mydense())
     model, ps, st = luxmodel
     xy0 = vcat(x0, 0.)
 
     p = Lux.ComponentArray(ps)
-    u(p) = (X, t) -> model(X, p, st)[1]  # ::: (X,t) -> R
+    u(pp) = (X, t) -> model(X, pp, st)[1]  # ::: (X,t) -> R
+    _drift(dxy, xy, p, t) = drift(dxy, xy, t, b, sigma, u(p), v, f)
+    _noise(dxy, xy, p, t) = noise(dxy, xy, t, sigma, u(p))
 
-    noise_proto = noise(xy0, 0., sigma, u(p))
-    _drift(xy, p, t) = drift(xy, t, b, sigma, u(p), v, f)
-    _noise(xy, p, t) = noise(xy, t, sigma, u(p))
-    # note that we store the nn params `p` in the SDEProblem for later AD
-    SDEProblem(_drift, _noise, xy0, T, p, noise_rate_prototype = noise_proto)
+    SDEProblem(_drift, _noise, xy0, T, p, noise_rate_prototype = zeros(length(xy0), length(xy0)))
 end
 
 ## @benchmark msolve(l::Prob{Vector,  Lux.Chain}) = 401 us
 ## @benchmark msolve(l::Prob{SVector, Lux.Chain}) = 163 us
 function msolve(prob ;ps=prob.p, salg=InterpolatingAdjoint(autojacvec=ReverseDiffVJP(), noisemixing=true), dt=0.01)
     prob = remake(prob, p=ps)
-    s = solve(prob, EM(), sensealg=salg, dt=dt)[end][end]
+    s = solve(prob, EM(), sensealg=salg, dt=dt)
+    s[end][end]
 end
 
-
-## @benchmark msens(ls::Prob{SVector, Flux.Chain}) = 37ms
-## @benchmark msens(l::Prob{Vector, Flux.Chain}) = 38ms
-## @benchmark msens(l::Prob{Vector, Lux.Chain}) = 25ms
 function msens(prob; kwargs...)
-    Zygote.gradient(ps->msolve(prob;ps=ps, kwargs...), prob.p) |> first
+    Zygote.gradient(psx->msolve(prob;ps=psx, kwargs...), prob.p) |> first
 end
 
 function benchmark()
-    l = LogVarProblem([0.])
-    ls = LogVarProblem(@SVector [0.])
-
-    @show @benchmark msolve(l)
-    @show @benchmark msolve(ls)
-    @show @benchmark msens(l)
-    @show @benchmark msens(ls)
+    l = LogVarProblem()
+    @show @benchmark msolve($l)
+    @show @benchmark msens($l)
 end
 
-function logvar(p, n=100)
-    var(msolve(p) for i in 1:n)
+function logvar(prob; ps=prob.p, n=100)
+    sum(msolve(prob, ps=ps) for i in 1:n)
 end
 
-function dlogvar(p, n=100)
-    Zygote.gradient(()->logvar(p, n), Flux.params(p.p)) |> first
+function dlogvar(prob, n=100)
+    Zygote.gradient(psx->logvar(prob; ps=psx, n=n), prob.p)[1]
 end
 
 function learnoptcontrol(p, n, m)
@@ -109,6 +95,7 @@ function learnoptcontrol(p, n, m)
     Flux.train!(()->logvar(p,n), Flux.params(p.p), data, opt)
 end
 
+#=
 function test_ad_systems()
     senses = [BacksolveAdjoint, InterpolatingAdjoint, QuadratureAdjoint,
     ReverseDiffAdjoint,
@@ -117,38 +104,42 @@ function test_ad_systems()
     ZygoteAdjoint,
     TrackerAdjoint]
     jvs = [false, true, ZygoteVJP(), ReverseDiffVJP(true), ReverseDiffVJP(), TrackerVJP()]
-    for s in senses
-        for j in jvs
-            @time try
-                msens(salg=s(autojacvec=j))
-                println("$s $j okay")
-            catch e
-                println("  $s $j fail")
+    i = 0
+    for prob in [LogVarProblem([0.]),
+        LogVarProblem(@SVector([0.])),
+        MLogVarProblem([0.]),
+        MLogVarProblem(@MVector([0.]))]
+        i+=1
+        for s in senses
+            for j in jvs
+                try
+                    @show @benchmark msens($prob, salg=$(s(autojacvec=j)))
+                    println("$i $s $j")
+                catch e
+                    println("$i  $s $j fail")
+                end
             end
         end
     end
 end
-
-#=
-
-ReverseDiffAdjoint(): ERROR: MethodError: no method matching *(::Vector{Float64}, ::Vector{Float64})
-ZygoteAdjoint(): try catch in EM()
-ForwardDiffSensitivity(): 0.02s
-QuadratureAdjoint(): Incompatible problem+solver pairing.
-InterpolatingAdjoint(): 0.05s
-BacksolveAdjoint(): 0.1s
-BacksolveAdjoint(autojacvec=false): 0.08
-BacksolveAdjoint(autojacvec=true): type Nothing has no field t
-BacksolveAdjoint(autojacvec=ZygoteVJP):
-BacksolveAdjoint(autojacvec=ReverseDiffVJP()): ERROR: MethodError: no method matching mul!(::Vector{Float64}, ::Matrix{Float64}, ::Adjoint{Float64, Vector{Float64}}, ::Bool, ::Bool)
-InterpolatingAdjoint(autojacvec=ZygoteVJP())): 0.05
-InterpolatingAdjoint(autojacvec=ReverseDiffVJP()): 0.03
-InterpolatingAdjoint(autojacvec=ReverseDiffVJP(true))): no method matching compile(::Nothing)
-
-
-
 =#
 
+
+## @benchmark msens(ls::Prob{SVector, Flux.Chain}) = 37ms
+## @benchmark msens(l::Prob{Vector, Flux.Chain}) = 38ms
+## @benchmark msens(l::Prob{Vector, Lux.Chain}) = 25ms
+q
+#=
+Trial(84.003 ms) oop Array InterpolatingAdjoint ZygoteVJP(false)
+Trial(23.119 ms) oop Array InterpolatingAdjoint ReverseDiffVJP{false}()
+
+Trial(48.637 ms) inplace Array BacksolveAdjoint ReverseDiffVJP{false}()
+Trial(17.011 ms) inplace Array InterpolatingAdjoint false
+Trial(23.284 ms) inplace Array InterpolatingAdjoint ReverseDiffVJP{false}()
+
+Trial(25.789 ms) inplace MArray InterpolatingAdjoint false
+Trial(32.074 ms) inplace MArray InterpolatingAdjoint ReverseDiffVJP{false}()
+=#
 
 #=
 ### hence we compute the adjoint / derivatives manually :|
