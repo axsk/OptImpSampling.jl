@@ -1,23 +1,21 @@
 using LinearAlgebra
-using StaticArrays
 using Zygote
-using DifferentialEquations, StochasticDiffEq, SciMLSensitivity
+using StochasticDiffEq, SciMLSensitivity
 using StatsBase
 using Lux, Random
-using ReverseDiff
+#using ReverseDiff
 
 # dX = b + σ * v + σ * dB
 # dY = -f - u'v + u'u/2
-# Goal: find u sth that Var[log(Y(T))] is minimized (=0)
+# Goal: find u = argmin Var[log(Y(T))] (which attains 0)
 # Motivation: The optimal u-controlled process gives is a 0-variance estimator for
-# W = ∫ f(X(t)) dt =
+# W = ∫ f(X(t)) dt
 
 # control problem problem
 b(X, t) = zero(X)
 v(X, t) = zero(X)
 f(x, T) = 1.
 sigma(X, t) = collect(I(length(X)))
-sigma(X::SVector{N, T}, t) where {N, T} = SMatrix{N, N, T}(I)
 
 function mydense(in=1)
     m = Lux.Chain(Lux.Dense(in,10,tanh), Lux.Dense(10,1))
@@ -27,7 +25,6 @@ function mydense(in=1)
 end
 
 function drift(dxy, xy, t, b, sigma, u, v, f)
-    #dxy[:] = drift(xy,t,b,sigma,u,v,f)
     X = @view xy[1:end-1]
     let b = b(X, t),  # is this beautiful or horrible :D?
         v = v(X, t),
@@ -41,7 +38,6 @@ function drift(dxy, xy, t, b, sigma, u, v, f)
 end
 
 function noise(dxy, xy, t, sigma, u)
-    #dxy .= noise(xy, t, sigma, u)
     dxy .= 0
     X = @view xy[1:end-1]
     dxy[1:end-1, 1:end-1] .= sigma(X, t)
@@ -54,25 +50,32 @@ termination(ub) = ContinuousCallback((u,t,int)->(u[1]-lb) * (ub-u[1]), terminate
 function LogVarProblem(x0=[0.], T=1., luxmodel=mydense())
     model, ps, st = luxmodel
     xy0 = vcat(x0, 0.)
+    n0 = zeros(length(xy0), length(xy0))
 
     p = Lux.ComponentArray(ps)
-    u(pp) = (X, t) -> model(X, pp, st)[1]  # ::: (X,t) -> R
+    u(p) = (X, t) -> model(X, p, st)[1]
     _drift(dxy, xy, p, t) = drift(dxy, xy, t, b, sigma, u(p), v, f)
     _noise(dxy, xy, p, t) = noise(dxy, xy, t, sigma, u(p))
 
-    SDEProblem(_drift, _noise, xy0, T, p, noise_rate_prototype = zeros(length(xy0), length(xy0)))
+    SDEProblem(_drift, _noise, xy0, T, p, noise_rate_prototype = n0)
 end
 
-## @benchmark msolve(l::Prob{Vector,  Lux.Chain}) = 401 us
-## @benchmark msolve(l::Prob{SVector, Lux.Chain}) = 163 us
-function msolve(prob ;ps=prob.p, salg=InterpolatingAdjoint(autojacvec=ReverseDiffVJP(), noisemixing=true), dt=0.01)
+function msolve(prob; ps=prob.p, dt=0.01, salg=InterpolatingAdjoint(autojacvec=ReverseDiffVJP(), noisemixing=true))
     prob = remake(prob, p=ps)
     s = solve(prob, EM(), sensealg=salg, dt=dt)
     s[end][end]
 end
 
-function msens(prob; kwargs...)
-    Zygote.gradient(psx->msolve(prob;ps=psx, kwargs...), prob.p) |> first
+function msens(prob)  # this works
+    Zygote.gradient(ps->msolve(prob;ps=ps), prob.p)[1]
+end
+
+function logvar(prob; ps=prob.p, n=100)  # this works
+    sum(msolve(prob, ps=ps) for i in 1:n)
+end
+
+function dlogvar(prob, n=100)  # this does not
+    Zygote.gradient(ps->logvar(prob; ps=ps, n=n), prob.p)[1]
 end
 
 function benchmark()
@@ -81,18 +84,8 @@ function benchmark()
     @show @benchmark msens($l)
 end
 
-function logvar(prob; ps=prob.p, n=100)
-    sum(msolve(prob, ps=ps) for i in 1:n)
-end
-
-function dlogvar(prob, n=100)
-    Zygote.gradient(psx->logvar(prob; ps=psx, n=n), prob.p)[1]
-end
-
-function learnoptcontrol(p, n, m)
-    data = Iterators.repeated((), m)
-    opt = ADAM(0.1)
-    Flux.train!(()->logvar(p,n), Flux.params(p.p), data, opt)
+function test()
+    dlogvar(LogVarProblem())
 end
 
 #=
@@ -128,7 +121,7 @@ end
 ## @benchmark msens(ls::Prob{SVector, Flux.Chain}) = 37ms
 ## @benchmark msens(l::Prob{Vector, Flux.Chain}) = 38ms
 ## @benchmark msens(l::Prob{Vector, Lux.Chain}) = 25ms
-q
+
 #=
 Trial(84.003 ms) oop Array InterpolatingAdjoint ZygoteVJP(false)
 Trial(23.119 ms) oop Array InterpolatingAdjoint ReverseDiffVJP{false}()
