@@ -1,17 +1,22 @@
 using LinearAlgebra
 using StaticArrays
-#using Flux
 using Zygote
 using DifferentialEquations, StochasticDiffEq, SciMLSensitivity
 using StatsBase
 using Lux, Random
 using ReverseDiff
 
+# dX = b + σ * v + σ * dB
+# dY = -f - u'v + u'u/2
+# Goal: find u sth that Var[log(Y(T))] is minimized (=0)
+# Motivation: The optimal u-controlled process gives is a 0-variance estimator for
+# W = ∫ f(X(t)) dt =
+
 # control problem problem
-sigma(X, t) = collect(I(length(X)))
 b(X, t) = zero(X)
 v(X, t) = zero(X)
 f(x, T) = 1.
+sigma(X, t) = collect(I(length(X)))
 sigma(X::SVector{N, T}, t) where {N, T} = SMatrix{N, N, T}(I)
 
 function mydense(in=1)
@@ -20,11 +25,6 @@ function mydense(in=1)
     ps, st = Lux.setup(rng, m)
     return m, ps, st
 end
-
-allbutlast(s) = s[1:end-1]
-#allbutlast(s::SVector) = s[SOneTo(length(s)-1)]::SVector
-#allbutlast(s::ReverseDiff.TrackedArray) = similar_type(s, Size(length(s)-1))(s[1:end-1])
-#allbutlast(s::SVector) = similar_type(s, Size(length(s)-1))(s[1:end-1])
 
 function drift(xy, t, b, sigma, u, v, f)
     X = allbutlast(xy)
@@ -40,15 +40,43 @@ function drift(xy, t, b, sigma, u, v, f)
     end
 end
 
-allbutlast(s::SVector) = similar_type(s, Size(length(s)-1))(s[1:end-1])
+function drift(dxy, xy, t, b, sigma, u, v, f)
+    #dxy[:] = drift(xy,t,b,sigma,u,v,f)
+    X = @view xy[1:end-1]
+    let b = b(X, t),  # is this beautiful or horrible :D?
+        v = v(X, t),
+        u = u(X, t),
+        σ = sigma(X, t),
+        f = f(X, t)
 
+        dxy[1:end-1] .= b + σ * v
+        dxy[end] = - f - dot(u, v) + dot(u, u) / 2
+    end
+end
+
+function noise(dxy, xy, t, sigma, u)
+    #dxy .= noise(xy, t, sigma, u)
+    dxy .= 0
+    X = @view xy[1:end-1]
+    dxy[1:end-1, 1:end-1] .= sigma(X, t)
+    dxy[end, 1:end-1] .= u(X,t)
+end
+
+allbutlast(s) = s[1:end-1]
+allbutlast(s::SVector) = similar_type(s, Size(length(s)-1))(s[1:end-1]) # xy[1:end-1], but ::SVector
+statify(X, x) = similar_type(X, Size(size(X)))(x)
+
+""" construct the noise matrix consisting of the blocks
+( Σ(X,t)  0 )
+( u'(X,t) 0 )
+"""
 function noise(xy, t, sigma, u)
-    @show typeof(xy)
-    X = allbutlast(xy) # xy[1:end-1], but ::SVector
-    @show typeof(X)
+    #@show typeof(xy)
+    X = allbutlast(xy)
+    #@show typeof(X)
     dx = sigma(X, t) # SMatrix{1,1, Float64}
     uu = u(X,t)  # u is a Lux Chain, returning a Vector{Float64}
-    dy = similar_type(X, Size(size(X)))(uu) # converting to SVector
+    dy = statify(X,uu) # converting to SVector
     dxy = vcat(dx, dy')
     ds = hcat(dxy, zero(dxy)) # returns SMatrix
 end
@@ -66,6 +94,21 @@ function LogVarProblem(x0=@SVector([0.]), T=1., luxmodel=mydense())
     noise_proto = noise(xy0, 0., sigma, u(p))
     _drift(xy, p, t) = drift(xy, t, b, sigma, u(p), v, f)
     _noise(xy, p, t) = noise(xy, t, sigma, u(p))
+    # note that we store the nn params `p` in the SDEProblem for later AD
+    SDEProblem(_drift, _noise, xy0, T, p, noise_rate_prototype = noise_proto)
+end
+
+
+function MLogVarProblem(x0=@MVector([0.]), T=1., luxmodel=mydense())
+    model, ps, st = luxmodel
+    xy0 = vcat(x0, 0.)
+
+    p = Lux.ComponentArray(ps)
+    u(p) = (X, t) -> model(X, p, st)[1]  # ::: (X,t) -> R
+
+    noise_proto = noise(xy0, 0., sigma, u(p))
+    _drift(dxy, xy, p, t) = drift(dxy, xy, t, b, sigma, u(p), v, f)
+    _noise(dxy, xy, p, t) = noise(dxy, xy, t, sigma, u(p))
     # note that we store the nn params `p` in the SDEProblem for later AD
     SDEProblem(_drift, _noise, xy0, T, p, noise_rate_prototype = noise_proto)
 end
@@ -117,38 +160,36 @@ function test_ad_systems()
     ZygoteAdjoint,
     TrackerAdjoint]
     jvs = [false, true, ZygoteVJP(), ReverseDiffVJP(true), ReverseDiffVJP(), TrackerVJP()]
-    for s in senses
-        for j in jvs
-            @time try
-                msens(salg=s(autojacvec=j))
-                println("$s $j okay")
-            catch e
-                println("  $s $j fail")
+    i = 0
+    for prob in [LogVarProblem([0.]),
+        LogVarProblem(@SVector([0.])),
+        MLogVarProblem([0.]),
+        MLogVarProblem(@MVector([0.]))]
+        i+=1
+        for s in senses
+            for j in jvs
+                try
+                    @show @benchmark msens($prob, salg=$(s(autojacvec=j)))
+                    println("$i $s $j")
+                catch e
+                    println("$i  $s $j fail")
+                end
             end
         end
     end
 end
 
 #=
+Trial(84.003 ms) oop Array InterpolatingAdjoint ZygoteVJP(false)
+Trial(23.119 ms) oop Array InterpolatingAdjoint ReverseDiffVJP{false}()
 
-ReverseDiffAdjoint(): ERROR: MethodError: no method matching *(::Vector{Float64}, ::Vector{Float64})
-ZygoteAdjoint(): try catch in EM()
-ForwardDiffSensitivity(): 0.02s
-QuadratureAdjoint(): Incompatible problem+solver pairing.
-InterpolatingAdjoint(): 0.05s
-BacksolveAdjoint(): 0.1s
-BacksolveAdjoint(autojacvec=false): 0.08
-BacksolveAdjoint(autojacvec=true): type Nothing has no field t
-BacksolveAdjoint(autojacvec=ZygoteVJP):
-BacksolveAdjoint(autojacvec=ReverseDiffVJP()): ERROR: MethodError: no method matching mul!(::Vector{Float64}, ::Matrix{Float64}, ::Adjoint{Float64, Vector{Float64}}, ::Bool, ::Bool)
-InterpolatingAdjoint(autojacvec=ZygoteVJP())): 0.05
-InterpolatingAdjoint(autojacvec=ReverseDiffVJP()): 0.03
-InterpolatingAdjoint(autojacvec=ReverseDiffVJP(true))): no method matching compile(::Nothing)
+Trial(48.637 ms) inplace Array BacksolveAdjoint ReverseDiffVJP{false}()
+Trial(17.011 ms) inplace Array InterpolatingAdjoint false
+Trial(23.284 ms) inplace Array InterpolatingAdjoint ReverseDiffVJP{false}()
 
-
-
+Trial(25.789 ms) inplace MArray InterpolatingAdjoint false
+Trial(32.074 ms) inplace MArray InterpolatingAdjoint ReverseDiffVJP{false}()
 =#
-
 
 #=
 ### hence we compute the adjoint / derivatives manually :|
