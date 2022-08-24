@@ -61,25 +61,26 @@ function LogVarProblem(x0=[0.], T=1., luxmodel=mydense())
 end
 
 function msolve(prob; ps=prob.p, dt=0.01, salg=InterpolatingAdjoint(autojacvec=ReverseDiffVJP(), noisemixing=true))
-    prob = remake(prob, p=ps)
-    s = solve(prob, EM(), sensealg=salg, dt=dt)
-    s[end][end]
+    #prob = remake(prob, p=ps)  # this kills AD
+    s = solve(prob, EM(), sensealg=salg, dt=dt, p=ps)
+    s.u[end][end]
 end
 
 function msens(prob)  # this works
     Zygote.gradient(ps->msolve(prob, ps=ps), prob.p)[1]
 end
 
-function logvar(prob; ps=prob.p, n=100)  # this works
-    sum(_ -> msolve(prob, ps=ps), 1:n)
+function logvar(prob; ps=prob.p, n=10)  # this works
+    #sum(_ -> msolve(prob, ps=ps) , 1:n)
+    var(msolve(prob, ps=ps) for i in 1:n)
 end
 
-function dlogvar(prob; n=100)  # this does not
+function dlogvar(prob; n=10)  # finally working
     Zygote.gradient(ps->logvar(prob, ps=ps, n=n), prob.p)[1]
 end
 
-import Base.+
-+(::NamedTuple{(:data, :itr), Tuple{NamedTuple{(), Tuple{}}, Nothing}}, ::NamedTuple{(:data, :itr), Tuple{NamedTuple{(), Tuple{}}, Nothing}}) = (data=(;), itr=nothing)
+#import Base.+
+#+(::NamedTuple{(:data, :itr), Tuple{NamedTuple{(), Tuple{}}, Nothing}}, ::NamedTuple{(:data, :itr), Tuple{NamedTuple{(), Tuple{}}, Nothing}}) = (data=(;), itr=nothing)
 
 function benchmark()
     l = LogVarProblem()
