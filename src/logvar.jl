@@ -60,22 +60,22 @@ function LogVarProblem(x0=[0.], T=1., luxmodel=mydense())
     SDEProblem(_drift, _noise, xy0, T, p, noise_rate_prototype = n0)
 end
 
-function msolve(prob, ps=prob.p, dt=0.01, salg=InterpolatingAdjoint(autojacvec=ReverseDiffVJP(), noisemixing=true))
+function msolve(prob; ps=prob.p, dt=0.01, salg=InterpolatingAdjoint(autojacvec=ReverseDiffVJP(), noisemixing=true))
     prob = remake(prob, p=ps)
     s = solve(prob, EM(), sensealg=salg, dt=dt)
     s[end][end]
 end
 
 function msens(prob)  # this works
-    Zygote.gradient(ps->msolve(prob, ps), prob.p)[1]
+    Zygote.gradient(ps->msolve(prob, ps=ps), prob.p)[1]
 end
 
-function logvar(prob, ps=prob.p, n=100)  # this works
-    sum(_ -> msolve(prob, ps), 1:n)
+function logvar(prob; ps=prob.p, n=100)  # this works
+    sum(_ -> msolve(prob, ps=ps), 1:n)
 end
 
-function dlogvar(prob, n=100)  # this does not
-    Zygote.gradient(ps->logvar(prob, ps, n), prob.p)[1]
+function dlogvar(prob; n=100)  # this does not
+    Zygote.gradient(ps->logvar(prob, ps=ps, n=n), prob.p)[1]
 end
 
 import Base.+
