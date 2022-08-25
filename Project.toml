@@ -2,7 +2,6 @@ name = "OptImpSampling"
 uuid = "e32dacf4-0a2b-4f26-bff4-03a75db77042"
 
 [deps]
-AbbreviatedStackTraces = "ac637c84-cc71-43bf-9c33-c1b4316be3d4"
 AbstractTrees = "1520ce14-60c1-5f80-bbc7-55ef81b5835c"
 Arpack = "7d9fca2a-8960-54d3-9f78-7d1dccf2cb97"
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
