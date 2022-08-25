@@ -43,9 +43,11 @@ def sample_loss_vectorized(model, dt, K):
     # start timer
     ct_initial = time.time()
 
-    # initialize trajectories
+    # initialize trajectories of processes X and Y 
     x_init = torch.tensor([-1.], dtype=torch.float32)
     xt = x_init.repeat((K, 1))
+    yt = torch.zeros(K)
+    y_fht = torch.empty(K)
 
     # initialize work and running integral
     work_t = torch.zeros(K)
@@ -63,36 +65,55 @@ def sample_loss_vectorized(model, dt, K):
     for k in np.arange(1, k_max + 1):
 
         # Brownian increment
-        dbt = torch.sqrt(dt) * torch.randn((K, 1))
+        dbt = torch.sqrt(dt) * torch.normal(torch.tensor(0.), torch.tensor(1.), size=(K, 1))
 
         # control
-        ut = model.forward(xt)
+        zt = - model.forward(xt)
+
+        # adaptive forward process
+        ut = - zt.detach()
 
         # update work with running cost
         work_t = work_t + f(xt) * dt
 
         # update deterministic integral
-        det_int_t = det_int_t + (torch.linalg.norm(ut, axis=1) ** 2) * dt
+        zt_normed_squared = torch.linalg.norm(zt, axis=1) ** 2
+        det_int_t = det_int_t + zt_normed_squared * dt
 
         # update stochastic integral
-        stoch_int_t = stoch_int_t + torch.matmul(
-            ut[:, np.newaxis, :],
+        zt_dbt_product = torch.matmul(
+            zt[:, np.newaxis, :],
             dbt[:, :, np.newaxis],
         ).squeeze()
+        stoch_int_t = stoch_int_t - zt_dbt_product
 
-        # sde update
+        # sde update process xt
         xt = xt + (- gradient(xt, alpha) + sigma * ut) * dt + sigma * dbt
+
+        # ut and zt product
+        ut_zt_product = torch.matmul(
+            ut[:, np.newaxis, :],
+            zt[:, :, np.newaxis],
+        ).squeeze()
+
+        # sde update process yt
+        yt = yt + (-f(xt) + 0.5 * zt_normed_squared + ut_zt_product) * dt \
+           + zt_dbt_product
 
         # get indices of trajectories which are new to the target set
         idx = get_idx_new_in_ts(xt, been_in_target_set)
 
         if idx.shape[0] != 0:
 
-            # update work with final cost
+            # update work and yt process with the final cost
             work_t = work_t + g(xt)
+            yt = yt + g(xt)
 
             # fix work
             work_fht[idx] = work_t.index_select(0, idx)
+
+            # fix yt process
+            y_fht[idx] = yt.index_select(0, idx)
 
             # fix running integrals
             det_int_fht[idx] = det_int_t.index_select(0, idx)
@@ -106,10 +127,10 @@ def sample_loss_vectorized(model, dt, K):
            break
 
     # compute cost functional (loss)
-    phi_fht = (work_fht + 0.5 * det_int_fht).detach()
+    phi_fht = (work_fht + 0.5 * det_int_fht).detach().numpy()
 
-    # compute effective loss
-    eff_loss = torch.mean(0.5 * det_int_fht + phi_fht * stoch_int_fht)
+    # compute log variance loss
+    log_var_loss = torch.var(y_fht)
 
     # compute mean and re of I_u
     I_u = np.exp(
@@ -124,7 +145,7 @@ def sample_loss_vectorized(model, dt, K):
     # end timer
     ct_final = time.time()
 
-    return eff_loss, phi_fht.numpy(), mean_I_u, var_I_u, re_I_u, time_steps, ct_final - ct_initial
+    return log_var_loss, phi_fht, mean_I_u, var_I_u, re_I_u, time_steps, ct_final - ct_initial
 
 def sample_loss_vectorized_stopped(model, dt, K):
     alpha = torch.tensor([1.], dtype=torch.float32)
@@ -136,62 +157,83 @@ def sample_loss_vectorized_stopped(model, dt, K):
     # start timer
     ct_initial = time.time()
 
-    # initialize trajectories
+    # initialize trajectories of processes X and Y 
     x_init = torch.tensor([-1.], dtype=torch.float32)
     xt = x_init.repeat((K, 1))
+    yt = torch.zeros(K)
 
-    # initialize work and running integral
+    # initialize fht
     work_t = torch.zeros(K)
+
+    # initialize running integrals
     det_int_t = torch.zeros(K)
     stoch_int_t = torch.zeros(K)
 
     # preallocate time steps
-    time_steps = np.zeros(K)
+    time_steps = np.empty(K)
 
     # number of trajectories not in the target set
-    n_not_in_ts = K
+    K_not_in_ts = K
 
     for k in np.arange(1, k_max + 1):
 
         # stop trajetories if all trajectories are in the target set
         idx = xt[:, 0] < 1
-        n_not_in_ts = torch.sum(idx)
-        if n_not_in_ts == 0:
+        K_not_in_ts = torch.sum(idx)
+        if K_not_in_ts == 0:
             break
 
         # Brownian increment
-        dbt = torch.sqrt(dt) * torch.randn((n_not_in_ts, 1))
+        dbt = torch.sqrt(dt) * torch.randn(K_not_in_ts).reshape(K_not_in_ts, 1)
 
-        # control
-        ut = model.forward(xt[idx])
+        # Z process
+        zt = - model.forward(xt[idx, :])
+
+        # adaptive forward process
+        ut = - zt.detach()
 
         # update work with running cost
         work_t[idx] = work_t[idx] + f(xt[idx]) * dt
 
         # update deterministic integral
-        det_int_t[idx] = det_int_t[idx] + (torch.linalg.norm(ut, axis=1) ** 2) * dt
+        zt_normed_squared = torch.linalg.norm(zt, axis=1) ** 2
+        det_int_t[idx] = det_int_t[idx] + zt_normed_squared * dt
 
         # update stochastic integral
-        stoch_int_t[idx] = stoch_int_t[idx] + torch.matmul(
-            ut[:, np.newaxis, :],
+        zt_dbt_product = torch.matmul(
+            zt[:, np.newaxis, :],
             dbt[:, :, np.newaxis],
         ).squeeze()
+        stoch_int_t[idx] = stoch_int_t[idx] - zt_dbt_product
 
-        # sde update
-        xt[idx] = xt[idx] + (- gradient(xt[idx], alpha) + sigma * ut) * dt + sigma * dbt
+        # sde update process xt
+        xt[idx, :] = xt[idx, :] \
+                   + (- gradient(xt[idx, :], alpha) + sigma * ut) * dt \
+                   + sigma * dbt
+
+        # ut and zt product
+        ut_zt_product = torch.matmul(
+            ut[:, np.newaxis, :],
+            zt[:, :, np.newaxis],
+        ).squeeze()
+
+        # sde update process xt
+        yt[idx] = yt[idx] \
+                + (- f(xt[idx]) + 0.5 * zt_normed_squared + ut_zt_product) * dt \
+                + zt_dbt_product
+
+        # numpy array indices
+        idx = idx.detach().numpy()
 
         # time steps
         time_steps[idx] += 1
 
 
-    # update work with final cost
-    work_t = work_t + g(xt)
+    # compute loss
+    log_var_loss = torch.var(yt)
 
     # compute cost functional (loss)
-    phi_t = (work_t + 0.5 * det_int_t).detach()
-
-    # compute effective loss
-    eff_loss = torch.mean(0.5 * det_int_t + phi_t * stoch_int_t)
+    phi_t = (work_t + 0.5 * det_int_t).detach().numpy()
 
     # compute mean and re of I_u
     I_u = np.exp(
@@ -206,7 +248,7 @@ def sample_loss_vectorized_stopped(model, dt, K):
     # end timer
     ct_final = time.time()
 
-    return eff_loss, phi_t.numpy(), mean_I_u, var_I_u, re_I_u, time_steps, ct_final - ct_initial
+    return log_var_loss, phi_t, mean_I_u, var_I_u, re_I_u, time_steps, ct_final - ct_initial
 
 
 def plot_controls(domain_h, controls):
@@ -268,9 +310,9 @@ def main():
         optimizer.zero_grad()
 
         # compute effective loss and relative entropy loss (phi_fht)
-        eff_loss, phi_fht, mean_I_u, var_I_u, re_I_u, time_steps, ct = sample_loss_vectorized(model, args.dt, args.K)
-        #eff_loss, phi_fht, mean_I_u, var_I_u, re_I_u, time_steps, ct = sample_loss_vectorized_stopped(model, args.dt, args.K)
-        eff_loss.backward()
+        log_var_loss, phi_fht, mean_I_u, var_I_u, re_I_u, time_steps, ct = sample_loss_vectorized(model, args.dt, args.K)
+        #log_var_loss, phi_fht, mean_I_u, var_I_u, re_I_u, time_steps, ct = sample_loss_vectorized_stopped(model, args.dt, args.K)
+        log_var_loss.backward()
 
         # update parameters
         optimizer.step()
@@ -305,3 +347,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
