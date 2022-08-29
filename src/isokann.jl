@@ -1,11 +1,6 @@
-export Isokann, run, mlp
+#export Isokann, run, mlp
 
-using Flux
-using Flux.Optimise: update!
-using Statistics
-using Plots
-using StatsBase
-import Zygote
+
 
 function mlp(x=[1,3,3], sig=true)
     last = sig ? Dense(x[end], 1, σ) : Dense(x[end], 1)

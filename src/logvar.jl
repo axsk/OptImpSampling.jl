@@ -4,6 +4,7 @@ using StochasticDiffEq, SciMLSensitivity
 using StatsBase
 using Lux, Random
 using Optimisers
+using BenchmarkTools
 
 # dX = b + σ * v + σ * dB
 # dY = -f - u'v + u'u/2
@@ -18,7 +19,6 @@ f(x, T) = 1.
 sigma(X, t) = collect(I(length(X)))
 ub = 1
 lb = -1
-stoptime = true # XXX This does not work with autodiff :(
 
 function mydense(in=1)
     m = Lux.Chain(Lux.Dense(in,10,tanh), Lux.Dense(10,1))
@@ -50,7 +50,7 @@ end
 # stop after first component of trajectory crosses lower or upper bound
 termination(ub, lb) = ContinuousCallback((u,t,int)->(u[1]-lb) * (ub-u[1]), terminate!)
 
-function LogVarProblem(x0=[0.], T=10., luxmodel=mydense())
+function LogVarProblem(x0=[0.], T=10., luxmodel=mydense(); stoptime=true)
     model, ps, st = luxmodel
     xy0 = vcat(x0, 0.)
     n0 = zeros(length(xy0), length(xy0))
@@ -65,7 +65,7 @@ function LogVarProblem(x0=[0.], T=10., luxmodel=mydense())
 end
 
 function msolve(prob; ps=prob.p, dt=0.01, salg=InterpolatingAdjoint(autojacvec=ReverseDiffVJP(), noisemixing=true))
-    #Zygote.@showgrad prob=remake(prob, p=ps)  # this kills AD
+    #prob = Zygote.@showgrad remake(prob, p=ps)  # this kills AD
     s = solve(prob, EM(), sensealg=salg, dt=dt, p=ps)
 end
 
@@ -122,4 +122,46 @@ function test()
     dlogvar(l)
     train(l)
     #plotu(l)
+end
+
+using Zygote
+using StochasticDiffEq, SciMLSensitivity
+
+
+# mwe for https://github.com/SciML/SciMLSensitivity.jl/issues/720
+# errors in about 50% of cases
+function mwe()
+    x0 = [0.]
+    drift(dx, x, p, t) = (dx .= p)
+    noise(dx, x, p, t) = (dx .= 0.1)
+    n0 = zeros(1,1)
+    T = 100.
+    p0 = [1.]
+    #cb = ContinuousCallback((u,t,int)->(u[1]-1), terminate!)
+    condition(u,t,integrator) = u[1] - 1
+    affect!(integrator) = terminate!(integrator)
+    cb = ContinuousCallback(condition,affect!)
+    prob = SDEProblem(drift, noise, x0, T, p0, noise_rate_prototype = n0, callback=cb)
+
+    sensealg = InterpolatingAdjoint(autojacvec=ReverseDiffVJP(), noisemixing=true)
+    Zygote.gradient(p0) do ps
+        solve(prob, EM(), dt=0.1, p=ps, sensealg=sensealg)[end][1]
+    end
+end
+
+# mwe for https://github.com/FluxML/Zygote.jl/issues/1294
+# doesnt reproduce atm
+function mwe2()
+    x0 = [0.]
+    drift(dx, x, p, t) = (dx .= p)
+    noise(dx, x, p, t) = (dx .= p)
+    n0 = zeros(1,1)
+    T = 1.
+    p0 = [1.]
+    prob = SDEProblem(drift, noise, x0, T, p0, noise_rate_prototype = n0)
+
+    sensealg = InterpolatingAdjoint(autojacvec=ReverseDiffVJP(), noisemixing=true)
+    Zygote.gradient(p0) do ps
+        solve(remake(prob, p=ps), EM(), dt=0.1, sensealg=sensealg)[end][1]
+    end
 end
