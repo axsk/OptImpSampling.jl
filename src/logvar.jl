@@ -61,8 +61,8 @@ function LogVarProblem(x0=[0.], T=1., luxmodel=mydense())
 end
 
 function msolve(prob; ps=prob.p, dt=0.01, salg=InterpolatingAdjoint(autojacvec=ReverseDiffVJP(), noisemixing=true))
-    #prob = remake(prob, p=ps)  # this kills AD
-    s = solve(prob, EM(), sensealg=salg, dt=dt, p=ps)
+    prob = Zygote.@showgrad remake(prob, p=ps)  # this kills AD
+    s = solve(prob, EM(), sensealg=salg, dt=dt)#, p=ps)
     s.u[end][end]
 end
 
