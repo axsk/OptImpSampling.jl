@@ -47,6 +47,25 @@ end
 # stop after first component of trajectory crosses lower or upper bound
 termination(ub) = ContinuousCallback((u,t,int)->(u[1]-lb) * (ub-u[1]), terminate!)
 
+using Zygote
+using StochasticDiffEq, SciMLSensitivity
+using StatsBase
+
+function mwe()
+    x0 = rand(1)
+    p0 = rand(1)
+
+    drift(du,u,p,t) = (du .= 1)
+    noise(du,u,p,t) = (du .= 1)
+
+    prob = SDEProblem(drift, noise, x0, 1., p0)
+    sensealg = InterpolatingAdjoint(autojacvec=ReverseDiffVJP())
+    Zygote.gradient(p0) do p
+        var(solve(Zygote.@showgrad(remake(prob, p=p)), EM(), dt=.1, sensealg=sensealg)[end][1] for i in 1:3)
+    end
+end
+mwe()
+
 function LogVarProblem(x0=[0.], T=1., luxmodel=mydense())
     model, ps, st = luxmodel
     xy0 = vcat(x0, 0.)
