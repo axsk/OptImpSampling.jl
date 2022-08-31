@@ -195,20 +195,18 @@ end
 
 mean_and_std(p::ProblemOptControl, x0, n) = mean_and_std(evaluate(p, x0, n))
 
-function test()
-    p = ProblemOptChi()
+function test_ociso()
+    p = ProblemOptSqra()
     mean_and_std(p, 0., 100)
 end
 
 ## Eigenfunction via SQRA
 
-using Sqra
-
 function eigenfunction_sqra(; grid=-2:.2:2, potential=doublewell, sigma=1)
     beta = 2 / sigma^2  # Einstein relation
     u = map(potential, grid)
     u = reshape(u, length(grid), 1)
-    Q = Sqra.sqra(u, beta) * (1/step(grid))^2 / beta
+    Q = sqra(u, beta) * (1/step(grid))^2 / beta
     val, vec = eigs(Q, which=:SM, nev=2)
     vec = vec[:,2] |> real
     val = val[2] |> real

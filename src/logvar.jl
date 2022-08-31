@@ -50,7 +50,7 @@ end
 # stop after first component of trajectory crosses lower or upper bound
 termination(ub, lb) = ContinuousCallback((u,t,int)->(u[1]-lb) * (ub-u[1]), terminate!)
 
-function LogVarProblem(x0=[0.], T=10., luxmodel=mydense(); stoptime=true)
+function LogVarProblem(x0=[0.], T=10., luxmodel=mydense(); stoptime=false)
     model, ps, st = luxmodel
     xy0 = vcat(x0, 0.)
     n0 = zeros(length(xy0), length(xy0))
@@ -61,7 +61,7 @@ function LogVarProblem(x0=[0.], T=10., luxmodel=mydense(); stoptime=true)
     _noise(dxy, xy, p, t) = noise(dxy, xy, t, sigma, u(p))
 
     cb = stoptime ? termination(ub, lb) : nothing
-    SDEProblem(_drift, _noise, xy0, T, p, noise_rate_prototype = n0, callback=cb)
+    StochasticDiffEq.SDEProblem(_drift, _noise, xy0, T, p, noise_rate_prototype = n0, callback=cb)
 end
 
 function msolve(prob; ps=prob.p, dt=0.01, salg=InterpolatingAdjoint(autojacvec=ReverseDiffVJP(), noisemixing=true))
@@ -114,7 +114,7 @@ function benchmark()
     @show @benchmark msens($l)
 end
 
-function test()
+function test_logvar()
     l = LogVarProblem()
     msolve(l)
     msens(l)

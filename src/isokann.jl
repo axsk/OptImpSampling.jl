@@ -1,6 +1,6 @@
 #export Isokann, run, mlp
 
-
+using Flux
 
 function mlp(x=[1,3,3], sig=true)
     last = sig ? Dense(x[end], 1, σ) : Dense(x[end], 1)
@@ -164,7 +164,7 @@ end
 
 # we use this to create a copy which uses StaticArrays, for faster d/dx gradients
 statify(x::Any) = x
-statify(c::Chain) = Chain(map(statify, c.layers)...)
+statify(c::Chain) = Flux.Chain(map(statify, c.layers)...)
 function statify(d::Dense)
     w = d.weight
     W = SMatrix{size(w)...}(w)
