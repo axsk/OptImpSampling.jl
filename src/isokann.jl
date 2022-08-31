@@ -51,7 +51,7 @@ end
     nmc = 10
     poweriter = 100
     learniter = 10
-    opt = ADAM(0.01)
+    opt = Flux.ADAM(0.01)
     model = mlp()
     forcing = 0.
     dt = .01
@@ -90,7 +90,7 @@ function run(iso::AIsokann; liveplot=false)
     learnrate = 1
     local plt
     for i in 1:poweriter
-        xs = sample(UniformSampler(-2,2,nx), 2)
+        xs = sample(UniformSampler(-2,2,nx), dim(iso.potential))
         chi = statify(model)
         ocp = ProblemOptChi(chi=chi, q=q, b=b, forcing=forcing, dt=dt, potential=iso.potential)
 
@@ -123,7 +123,7 @@ function learnstep!(model, xs, target, opt)
         mean(abs2, target - predict)
     end
     grad = back(one(loss))
-    update!(opt, ps, grad)
+    Flux.update!(opt, ps, grad)
     loss
 end
 
@@ -138,7 +138,6 @@ function cbplot(model, loss, xs, target, stds, std, iso)
     p1=plot(sqrt.(loss), yaxis=:log, title="loss", label="loss", legend=:bottomleft)
     plot!(p1, stds, label="std")
     #dim(iso.potential) > 1 && return p1
-
     if length(xs) > 0
         if length(xs[1]) > 1  # hacky way to plot first dim
 
@@ -147,7 +146,7 @@ function cbplot(model, loss, xs, target, stds, std, iso)
             xs = reduce(hcat, xs)'
             scatter!(p2, xs[:,1], xs[:,2], markersize=l.^2 * 100)
         else
-            p2=plot(x->model([x, 0]), -5:.1:5, ylims=(-.1,1.1), title="fit", label="χ", legend=:best)
+            p2=plot(x->model([x]), -5:.1:5, ylims=(-.1,1.1), title="fit", label="χ", legend=:best)
             scatter!(p2, reduce(vcat, xs), target, yerror=std, label="SKχ")
         end
 

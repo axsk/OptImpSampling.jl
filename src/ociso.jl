@@ -195,11 +195,6 @@ end
 
 mean_and_std(p::ProblemOptControl, x0, n) = mean_and_std(evaluate(p, x0, n))
 
-function test_ociso()
-    p = ProblemOptSqra()
-    mean_and_std(p, 0., 100)
-end
-
 ## Eigenfunction via SQRA
 
 function eigenfunction_sqra(; grid=-2:.2:2, potential=doublewell, sigma=1)
