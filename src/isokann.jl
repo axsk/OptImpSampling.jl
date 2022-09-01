@@ -23,7 +23,7 @@ function SK(ocp, xs::AbstractVector, nmc=10)
     kxs = zeros(length(xs))
     stds = zeros(length(xs))
     # TODO @threads zip(xs, 1:nmc) -> matrix
-    Threads.@threads for i in 1:length(xs)
+    Threads.@threads for i in eachindex(xs)
         kxs[i], stds[i] = mean_and_std(evaluate(deepcopy(ocp), xs[i], nmc))
         yield()
     end
@@ -107,10 +107,11 @@ function run(iso::AIsokann; liveplot=false)
             push!(stds, mean(std))
             push!(ls, loss)
         end
-        plt = cbplot(model, ls, xs, target, stds, std, iso)
-        liveplot && display(plt)
+        #plt = cbplot(model, ls, xs, target, stds, std, iso)
+        #liveplot && display(plt)
     end
-    display(plt)
+    # TODO: find means to plot on demand
+    #display(plt)
     iso, (ls, stds)
 end
 

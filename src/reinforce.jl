@@ -1,6 +1,7 @@
 # proof of concept of the REINFORCE-like algorithm
 # to learn the optimal importance sampler Z = E_p[f] = E_q[pf/q]
 # i.e. the optimal proposal density q* = pf / Z
+# for pointwise (not pathwise) expectations
 # works so far
 
 using Plots
@@ -24,6 +25,7 @@ function dtheta!(dtheta, Q, p, f, E, samples)
         px = p(x)
         fx = f(x)
 
+        # TODO: write down the derivation
         dtheta .+= dqx / qx * (E^2 - (px*fx/qx)^2) # this is where the meat is
         e += fx * px / qx
         var += (E-(px*fx/qx))^2

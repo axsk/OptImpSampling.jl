@@ -5,7 +5,7 @@
 # 2019 - Kebiri Hartmann
 # Adaptive importance sampling with forward-backward stochastic differential equations
 
-# Whats new here is
+# We improve upon the reference in
 # a) we use a NN for learning the value function
 # b) instaed of learning V_t iterativelu backwards in time
 #    we learn it for all times at once, improving our trajectories while learning.
