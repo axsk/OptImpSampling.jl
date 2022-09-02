@@ -1,9 +1,10 @@
 using LinearAlgebra
 using Zygote
 using StochasticDiffEq, SciMLSensitivity
-using StatsBase
-using Lux, Random
-using Optimisers
+using StatsBase: var
+using Random
+import Lux
+import Optimisers
 using BenchmarkTools
 
 # dX = b + σ * v + σ * dB
@@ -20,8 +21,8 @@ sigma(X, t) = collect(I(length(X)))
 ub = 1
 lb = -1
 
-function mydense(in=1)
-    m = Lux.Chain(Lux.Dense(in,10,tanh), Lux.Dense(10,1))
+function mydense(dim=1)
+    m = Lux.Chain(Lux.Dense(dim,10,tanh), Lux.Dense(10,dim))
     rng = Random.default_rng()
     ps, st = Lux.setup(rng, m)
     return m, ps, st
@@ -122,4 +123,98 @@ function test_logvar()
     dlogvar(l)
     train(l)
     #plotu(l)
+end
+
+### second attempt
+# construct X and Y seperately
+# allows reusing forward trajs
+
+
+function primal_process(x0=[0.], T=1., ub=1., lb=1.)
+    drift(x, p, t) = let b = b(x, t), v = v(x, t), σ = sigma(x, t)
+        b .+ σ * v
+    end
+
+    noise(x, p, t) = sigma(x, t)[1]
+
+    cb = termination(ub, lb)
+    StochasticDiffEq.SDEProblem(drift, noise, x0, T, callback = cb, save_noise = true,
+        alg=EM(), dt=.01)
+end
+
+function adjoint_process(X, luxmodel)
+    model, ps, st = luxmodel
+    p = Lux.ComponentArray(ps)
+    u(x, p, t) = model(x, p, st)[1]  # TODO: augment time to state
+
+    drift(x, p, t) = let X = X(t),
+        u = u(X, p, t),
+        v = v(X, t),
+        f = f(X, t)
+        - dot(u,v) - f + 1/2 * dot(u, u)
+    end
+
+    noise(x, p, t) = - u(X(t), p, t)'
+
+    noisecopy = NoiseWrapper(X.W)
+    StochasticDiffEq.SDEProblem(drift, noise, 0., X.prob.tspan[end], p,
+        noise=noisecopy, noise_rate_prototype=zeros(1,2), alg=EM(), dt=.01)
+end
+
+function solveXY(x0=[0.], luxmodel=mydense(length(x0)), T=1., ub=1., lb=1., dt=.1)
+    X = solve(primal_process(x0, T, ub, lb), EM(), dt=dt)
+    Y = solve(adjoint_process(X, luxmodel), EM(), dt=dt)
+end
+
+function Yensemble(;n=10, x0=[0.], luxmodel=mydense(length(x0)), T=1., ub=1., lb=1., dt=.1)
+    map(1:n) do _
+        X = solve(primal_process(x0, T, ub, lb), EM(), dt=dt)
+        adjoint_process(X, luxmodel)
+    end
+end
+
+function manualY(X, luxmodel)
+    model, ps, st = luxmodel
+    p = Lux.ComponentArray(ps)
+    u(x, p, t) = model(x, p, st)[1]  # TODO: augment time to state
+    y = 0.
+    for (X, W, t, dt) in zip(X.u[1:end-1], X.W.W[1:end-1], X.t, diff(X.t))
+        let u = u(X, p, t),
+            v = v(X, t),
+            f = f(X, t)
+        y += (- dot(u,v) - f + 1/2 * dot(u, u) - dot(u, W)) * dt
+        end
+    end
+    y
+end
+
+function logvar2(;ys=Yensemble(), ps=ys[1].p, sensealg=nothing)
+    var(solve(y, p=ps, sensealg=sensealg)[end][1] for y in ys)
+end
+
+function dlogvar2(;ys=Yensemble(), ps=ys[1].p, sensealg=nothing)
+    Zygote.gradient(ps) do p
+        logvar2(;ys, ps=p, sensealg)
+    end
+end
+
+function test_ad_systems()
+    senses = [BacksolveAdjoint, InterpolatingAdjoint, QuadratureAdjoint,
+    ReverseDiffAdjoint,
+    ForwardDiffSensitivity,
+    ForwardSensitivity,
+    ZygoteAdjoint,
+    TrackerAdjoint]
+    jvs = [false, true, ZygoteVJP(), ReverseDiffVJP(true), ReverseDiffVJP(), TrackerVJP()]
+    for s in senses
+        for j in jvs
+            try
+                dlogvar2(sensealg = s(autojacvec=j))
+                @time dlogvar2(sensealg = s(autojacvec=j))
+                println("$s $j")
+            catch e
+                println("$s $j fail")
+            end
+        end
+    end
 end
