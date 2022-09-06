@@ -10,19 +10,30 @@ using Lux: Dense, Chain
 using Random: default_rng
 using LinearAlgebra: dot
 using ForwardDiff: gradient
+import Random
+import Lux
 
 @with_kw struct Energy
-    f = (x)->1
-    g = (x)->0
-    stoptime = nothing
+    f = x -> 1
+    g = x -> 0
+    stoptime = x -> x[1] - 1  # not implemented yet
 end
 
 @with_kw struct Langevin
-    V = x->sum(abs2, x)
+    V = x -> sum(abs2, x)
     σ = 1.
 end
 
-function samplepath(x0, lv::Langevin; dt=.1, u=x->zero(x0))
+function samplepath(x0, lv::Langevin; dt=.1)
+    drift(x,p,t) = - gradient(lv.V, x)
+    noise(x,p,t) = lv.σ
+    prob = SDEProblem(drift, noise, x0, [0,1], save_noise=true)
+    solve(prob, EM(), dt=dt)
+end
+
+function samplepath(x0, lux, lv::Langevin; dt=.1)
+    (model, ps, st) = lux
+    u(x) =  Lux.apply(model, x, ps, st)[1]
     drift(x,p,t) = - gradient(lv.V, x) + u(x)
     noise(x,p,t) = lv.σ
     prob = SDEProblem(drift, noise, x0, [0,1], save_noise=true)
@@ -37,24 +48,48 @@ function dvar_summand(Xs, lux, e::Energy = Energy())
 
     Zs = map(X->W(X, e), Xs)
     dpdqs = map(X->dpdq(X, u), Xs)
-    E = mean(prod.(Zs, dpdqs))
+    E = mean(Zs .* dpdqs)
 
     dV = mean(zip(Xs, Zs, dpdqs)) do (X, Z, dpdq)
-        dlogq = integrate(X) do (X, dW)
+        dlogq = integrate(X) do X, dW
             #-∇u(X) * (dW + u(X))
-            if true
-                (ux, st_), ∇u = Lux.pullback(p->u(x, ps), ps)
-                - ∇u((dW + ux, nothing))
-            else
-                Lux.gradient(ps) do ps
+
+            m = :gr
+            dv = if m == :pb
+                ux, ∇u = Lux.pullback(p->u(X, p), Lux.ComponentArray(ps))
+                - ∇u(dW + ux)[1]
+            elseif m==:cpb  # cant avoid extra computation of ux
+                let u=u(X, ps)
+                    pullback(dW + u, lux, X)
+                end
+            elseif m == :gr
+                Lux.gradient( ps |> Lux.ComponentArray) do ps
                     let u=u(X, ps)
                         - dot(u, dW .+ u ./ 2)
                     end
+                end[1]
+            elseif m==:cgr
+                mgradient(lux, X) do u
+                    - dot(u, dW .+ u ./ 2)
                 end
             end
+            dv
         end
-        dlogq * (E^2 - (dpdq * Z)^2)
+        #@show dlogq
+        dlogq .* (E^2 - (dpdq * Z)^2)
     end
+end
+
+function mgradient(loss, (mod,ps,st)::StatefulModel, x)
+    Lux.gradient(ps |> Lux.ComponentArray) do ps
+        Zygote.@showgrad loss(mod(x,ps,st))
+    end[1]
+end
+
+function pullback(vec, (mod,ps,st)::StatefulModel, x)
+    ux, ∇u = Lux.pullback(p -> Lux.apply(model, x, p, st), Lux.ComponentArray(ps))
+    @show ux, ∇u, vec
+    @show ∇u(vec)
 end
 
 function testdvar()
@@ -80,7 +115,7 @@ end
 # integrate a stochastic function f(X, dW) along the path X: ∫ f(X(t), dW(t)) dt
 function integrate(f, X)
     sum(zip(X.u, diff(X.t), diff(X.W.u))) do (X, dt, dW)
-        @show f(X, dW) * dt
+        f(X, dW) .* dt
     end
 end
 
@@ -95,3 +130,8 @@ function mlp(layers=[1,10,1])
 end
 
 mlp(n::Int) = mlp([n, 10, n])
+
+## lux convenience wrappers
+
+StatefulModel = Tuple{<:Lux.AbstractExplicitLayer, <:Any, <:NamedTuple}
+((mod,ps,st)::StatefulModel)(x) = mod(x,ps,st)
