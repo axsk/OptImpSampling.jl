@@ -54,7 +54,7 @@ function dvar_summand(Xs, lux, e::Energy = Energy())
         dlogq = integrate(X) do X, dW
             #-∇u(X) * (dW + u(X))
 
-            m = :gr
+            m = :cgr
             dv = if m == :pb
                 ux, ∇u = Lux.pullback(p->u(X, p), Lux.ComponentArray(ps))
                 - ∇u(dW + ux)[1]
@@ -78,18 +78,6 @@ function dvar_summand(Xs, lux, e::Energy = Energy())
         #@show dlogq
         dlogq .* (E^2 - (dpdq * Z)^2)
     end
-end
-
-function mgradient(loss, (mod,ps,st)::StatefulModel, x)
-    Lux.gradient(ps |> Lux.ComponentArray) do ps
-        Zygote.@showgrad loss(mod(x,ps,st))
-    end[1]
-end
-
-function pullback(vec, (mod,ps,st)::StatefulModel, x)
-    ux, ∇u = Lux.pullback(p -> Lux.apply(model, x, p, st), Lux.ComponentArray(ps))
-    @show ux, ∇u, vec
-    @show ∇u(vec)
 end
 
 function testdvar()
@@ -135,3 +123,15 @@ mlp(n::Int) = mlp([n, 10, n])
 
 StatefulModel = Tuple{<:Lux.AbstractExplicitLayer, <:Any, <:NamedTuple}
 ((mod,ps,st)::StatefulModel)(x) = mod(x,ps,st)
+
+function mgradient(loss, (model,ps,st)::StatefulModel, x)
+    Lux.gradient(ps |> Lux.ComponentArray) do ps
+        loss(model(x,ps,st)[1])
+    end[1]
+end
+
+function pullback(dy, (model,ps,st)::StatefulModel, x)
+    u(p) = Lux.apply(model, x, p, st)[1]
+    y, back = Lux.pullback(u, Lux.ComponentArray(ps))
+    back(dy)[1]
+end
