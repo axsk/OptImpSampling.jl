@@ -27,7 +27,8 @@ end
 function samplepath(x0, lv::Langevin; dt=.1)
     drift(x,p,t) = - gradient(lv.V, x)
     noise(x,p,t) = lv.σ
-    prob = SDEProblem(drift, noise, x0, [0,1], save_noise=true)
+    termcond = ContinuousCallback((u,t,int)->lv.stoptime(u), terminate!)
+    prob = SDEProblem(drift, noise, x0, [0,1], save_noise=true, callback=termcond)
     solve(prob, EM(), dt=dt)
 end
 
@@ -54,21 +55,21 @@ function dvar_summand(Xs, lux, e::Energy = Energy())
         dlogq = integrate(X) do X, dW
             #-∇u(X) * (dW + u(X))
 
-            m = :cgr
-            dv = if m == :pb
+            m = :pb
+            dv = if m == :pb  # 75us
                 ux, ∇u = Lux.pullback(p->u(X, p), Lux.ComponentArray(ps))
-                - ∇u(dW + ux)[1]
+                dv = - ∇u(dW + ux)[1]
             elseif m==:cpb  # cant avoid extra computation of ux
-                let u=u(X, ps)
+                let u=u(X, ps)  # 73us
                     pullback(dW + u, lux, X)
                 end
-            elseif m == :gr
+            elseif m == :gr  #84us
                 Lux.gradient( ps |> Lux.ComponentArray) do ps
                     let u=u(X, ps)
                         - dot(u, dW .+ u ./ 2)
                     end
                 end[1]
-            elseif m==:cgr
+            elseif m==:cgr  #73us
                 mgradient(lux, X) do u
                     - dot(u, dW .+ u ./ 2)
                 end
