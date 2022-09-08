@@ -156,7 +156,8 @@ function adjoint_process(X, luxmodel)
 
     noise(x, p, t) = - u(X(t), p, t)'
 
-    noisecopy = NoiseWrapper(X.W)
+    noisecopy = NoiseWrapper(X.W)  # this is not differentiable
+    noisecopy = deepcopy(X.W)  # i cant remember whether this worked
     StochasticDiffEq.SDEProblem(drift, noise, 0., X.prob.tspan[end], p,
         noise=noisecopy, noise_rate_prototype=zeros(1,2), alg=EM(), dt=.01)
 end
