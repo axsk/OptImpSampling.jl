@@ -22,31 +22,24 @@ end
 function SK(ocp, xs::AbstractVector, nmc=10)
     kxs = zeros(length(xs))
     stds = zeros(length(xs))
+    ys = zeros(length(xs), length(xs[1]), nmc)
+    chis = zeros(length(xs), nmc)
     # TODO @threads zip(xs, 1:nmc) -> matrix
     Threads.@threads for i in eachindex(xs)
-        kxs[i], stds[i] = mean_and_std(evaluate(deepcopy(ocp), xs[i], nmc))
+        yy, cc, ws = prop_and_evaluate(deepcopy(ocp), xs[i], nmc)
+        ys[i,:,:] = yy
+        chis[i, :]  = cc
+        kxs[i], stds[i] = mean_and_std(chis[i,:] .* ws)
         yield()
     end
     λ, b = shiftscale!(kxs, stds)
     stds ./= sqrt(nmc)  # monte carlo variance
-    kxs, stds, λ, b
+    kxs, stds, λ, b, ys
 end
 
 abstract type AIsokann end
-@with_kw mutable struct Isokann3 <: AIsokann
-    nx = 10
-    nmc = 10
-    poweriter = 100
-    learniter = 1
-    opt = Nesterov(.1, .9)
-    model = mlp()
-    forcing = 0.
-    dt = .01
-    ls = Float64[]
-    stds = Float64[]
-end
 
-@with_kw mutable struct Isokann4 <: AIsokann
+@with_kw mutable struct Isokann <: AIsokann
     nx = 10
     nmc = 10
     poweriter = 100
@@ -66,36 +59,34 @@ end
     n::Int = 10
 end
 
-@with_kw mutable struct GridSampler
-    min::Float64 = -2.
-    max::Float64 = 2.
-    n::Int = 10
-end
-
 sample(s::UniformSampler, dim=1) = [rand(dim) * (s.max-s.min) .+ s.min for i in 1:s.n]
-sample(s::GridSampler, dim=1) = [rand(dim) * (s.max-s.min) .+ s.min for i in 1:s.n]
 
-
-Isokann = Isokann4
 converging() = Isokann(poweriter=1000, learniter=100, nmc=100, forcing=1, opt=ADAM(0.001), model=mlp([1,3,3], false), dt=.01)
 happy1() = Isokann(nx=30, poweriter=100, learniter=100, nmc=3, forcing=1., opt= ADAM(0.01), dt=0.01)
 basic2d() = Isokann(model=mlp([2,5,5]), potential=triplewell)
 better2d() = Isokann(model=mlp([2,5,5,5]), potential=triplewell, forcing=1, dt=0.001)
 
-function run(iso::AIsokann; liveplot=0)
+function run(iso::AIsokann; liveplot=0, humboldt=true, hotfixbnd=false)
     (;nx, nmc, poweriter, learniter, opt, model, forcing, dt, ls, stds) = iso
     q = -1.
     b = 0.
     λ = 0
-    learnrate = 0.5
+    learnrate = 1
     local plt
+    xs = sample(UniformSampler(-2,2,nx), dim(iso.potential))
     for i in 1:poweriter
-        xs = sample(UniformSampler(-2,2,nx), dim(iso.potential))
-        xs = [xs; [[-2.], [2.]]]  # hotfix for infering λ, b with small samplings
+        if hotfixbnd
+            xs = [xs; [[-2.], [2.]]]  # hotfix for infering λ, b with small samplings
+        end
         chi = statify(model)
         ocp = ProblemOptChi(chi=chi, q=q, b=b, forcing=forcing, dt=dt, potential=iso.potential)
 
-        #xxs = humboldtsample(xs, ocp, 2)
+        if humboldt
+            xs = humboldtsample(xs, ocp, nx, 10)
+        else
+            xs = sample(UniformSampler(-2,2,nx), dim(iso.potential))
+        end
+        # TODO: SK now also exports the simulated endpoints, re-use them for humboldt
         target, std, λ1, b1 = SK(ocp, xs, nmc)  # new trajectories
 
             λ = λ * (1-learnrate) + λ1 * learnrate
@@ -108,7 +99,7 @@ function run(iso::AIsokann; liveplot=0)
             push!(stds, mean(std))
             push!(ls, loss)
         end
-        if i > 0 && i % liveplot == 0
+        if liveplot > 0 && i % liveplot == 0
             plt = cbplot(model, ls, xs, target, stds, std, iso)
           display(plt)
         end
@@ -145,12 +136,12 @@ function cbplot(model, loss, xs, target, stds, std, iso)
     if length(xs) > 0
         if length(xs[1]) > 1  # hacky way to plot first dim
 
-            p2 = contour(-2:.1:2, -2:.1:2, (x,y)->model([x,y]), fill=true)
-            @show l = map(model, xs) - target
+            p2 = contour(-2:.1:2, -2:.1:2, (x,y)->model([x,y]), fill=true, alpha=.1)
+            l = map(model, xs) - target
             xs = reduce(hcat, xs)'
             scatter!(p2, xs[:,1], xs[:,2], markersize=l.^2 * 100)
         else
-            p2=plot(x->model([x]), -5:.1:5, ylims=(-.1,1.1), title="fit", label="χ", legend=:best)
+            p2=plot(x->model([x]), -3:.1:3, ylims=(-.1,1.1), title="fit", label="χ", legend=:best)
             scatter!(p2, reduce(vcat, xs), target, yerror=std, label="SKχ")
         end
 
@@ -176,40 +167,57 @@ function statify(d::Dense)
     Dense(W, B, d.σ)
 end
 
+"
+humboldtsample(xs, ocp, n, branch)
 
-" subsample_uniform(ys, n)
-
-Return up to `n` indices into `ys` such that these elements each
-lie in one of `n` uniform partitions of the unit interval.
-Does return less indices if not all partitions were hit "
-function subsample_uniform(ys, n)
-    p = sortperm(ys)
-    s = ys[p]
-    picks = []
-    first = 1
-    for i in 1:n
-        last = findlast(x->x<=i/n, s)
-        (isnothing(last) || (last < first)) && continue  # no element found in box
-        push!(picks, rand(first:last))
-        first = last + 1
-    end
-    p[picks]
-end
-
-
-function humboldtsample(xs, ocp, branch)
+given a list of points `xs`, propagate each into `branch` trajectories according to the dynamics in `ocp`
+and subsamble `n` of the resulting points uniformly over their chi value.
+Returns a list of approximately equi-chi-distant start points"
+function humboldtsample(xs, ocp, n, branch)
     ocp = deepcopy(ocp)
     ocp.forcing = 0.
     nxs = copy(xs)
     for x in xs
         for i in 1:branch
-            s = msolve(ocp, x)[1:end-1]
+            s = msolve(ocp, x)[end][1:end-1]
             push!(nxs, s)
         end
     end
 
     ys = map(ocp.chi, nxs)
-    is = subsample_uniform(ys, length(xs))
+    is = subsample_uniformgrid(ys, n)
 
-    return xs[is]
+    return nxs[is]
+end
+
+" subsbample_uniformgrid(ys, n) -> is
+
+given a list of values `ys`, return `n`` indices `is` such that `ys[is]` are approximately uniform by
+picking the closest points to a randomly perturbed grid in [0,1]."
+function subsample_uniformgrid(ys, n)
+    #n = n - 2
+    needles = (rand(n)  .+ (0:n-1)) ./ n
+    #needles = [[0,1]; needles]
+    pickclosest(ys, needles)
+end
+
+" pickclosest(haystack, needles)
+
+Return the indices into haystack which lie closest to `needles` without duplicates
+by removing haystack candidates after a match.
+Note that this is not invariant under pertubations of needles"
+function pickclosest(haystack, needles)
+    picks = []
+    for needle in needles
+        inds = sortperm(norm.(haystack .- needle))
+        for i in inds
+            if i in picks
+                continue
+            else
+                push!(picks, i)
+                break
+            end
+        end
+    end
+    return picks
 end

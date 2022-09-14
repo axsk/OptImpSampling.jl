@@ -131,7 +131,7 @@ function msolve(p::ProblemOptControl, x0, n, solver=SROCK2())
         xg[end] = exp(-xg[end])
     end
     =#
-    [solve(prob, solver, dt=p.dt)[end] for i in 1:n]
+    [solve(prob, solver, dt=p.dt)[end] for i in 1:n]  # TODO: msolve above does not return end time
 end
 
 
@@ -149,6 +149,20 @@ function evaluate(p::ProblemOptControl, x0::AbstractVector, n)
 end
 
 evaluate(p::ProblemOptControl, x0::AbstractVector) = evaluate(p, x0, 1)[1]
+
+function prop_and_evaluate(p::ProblemOptControl, x0::AbstractVector, n)
+    d = length(x0)
+    ys = similar(x0, d, n)
+    ws = zeros(n)
+    for i in 1:n
+        s = msolve(p, x0)[end]
+        ys[:, i] .= s[1:end-1]
+        ws[i] = exp(-s[end])
+    end
+    chis = mapslices(p.chi, ys, dims=1)
+    return ys, chis, ws
+end
+
 
 ## Plots
 
