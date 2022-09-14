@@ -82,15 +82,16 @@ happy1() = Isokann(nx=30, poweriter=100, learniter=100, nmc=3, forcing=1., opt= 
 basic2d() = Isokann(model=mlp([2,5,5]), potential=triplewell)
 better2d() = Isokann(model=mlp([2,5,5,5]), potential=triplewell, forcing=1, dt=0.001)
 
-function run(iso::AIsokann; liveplot=false)
+function run(iso::AIsokann; liveplot=0)
     (;nx, nmc, poweriter, learniter, opt, model, forcing, dt, ls, stds) = iso
     q = -1.
     b = 0.
     λ = 0
-    learnrate = 1
+    learnrate = 0.5
     local plt
     for i in 1:poweriter
         xs = sample(UniformSampler(-2,2,nx), dim(iso.potential))
+        xs = [xs; [[-2.], [2.]]]  # hotfix for infering λ, b with small samplings
         chi = statify(model)
         ocp = ProblemOptChi(chi=chi, q=q, b=b, forcing=forcing, dt=dt, potential=iso.potential)
 
@@ -107,8 +108,10 @@ function run(iso::AIsokann; liveplot=false)
             push!(stds, mean(std))
             push!(ls, loss)
         end
-        #plt = cbplot(model, ls, xs, target, stds, std, iso)
-        #liveplot && display(plt)
+        if i > 0 && i % liveplot == 0
+            plt = cbplot(model, ls, xs, target, stds, std, iso)
+          display(plt)
+        end
     end
     # TODO: find means to plot on demand
     #display(plt)
@@ -137,7 +140,7 @@ function cbplot(model, loss, xs, target, stds, std, iso)
     length(loss) % 1 == 0 || return
 
     p1=plot(sqrt.(loss), yaxis=:log, title="loss", label="loss", legend=:bottomleft)
-    plot!(p1, stds, label="std")
+    #plot!(p1, stds, label="std")
     #dim(iso.potential) > 1 && return p1
     if length(xs) > 0
         if length(xs[1]) > 1  # hacky way to plot first dim
