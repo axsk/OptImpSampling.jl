@@ -32,7 +32,7 @@ function samplepath(x0, lv::Langevin=Langevin(), u=(x->zero(x0)); dt=.1)
     _drift(x,p,t) = drift(lv, x) + lv.σ * u(x)
     _noise(x,p,t) = lv.σ
     termcond = ContinuousCallback((u,t,int)->lv.stoptime(u), terminate!)
-    prob = SDEProblem(drift, noise, x0, [0,1], save_noise=true, callback=termcond)
+    prob = SDEProblem(_drift, _noise, x0, [0,1], save_noise=true, callback=termcond)
     solve(prob, EM(), dt=dt)
 end
 
