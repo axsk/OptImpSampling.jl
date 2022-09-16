@@ -131,7 +131,7 @@ function cbplot(model, loss, xs, target, stds, std, iso)
     length(loss) % 1 == 0 || return
 
     p1=plot(sqrt.(loss), yaxis=:log, title="loss", label="loss", legend=:bottomleft)
-    #plot!(p1, stds, label="std")
+    plot!(p1, stds, label="std")
     #dim(iso.potential) > 1 && return p1
     if length(xs) > 0
         if length(xs[1]) > 1  # hacky way to plot first dim
