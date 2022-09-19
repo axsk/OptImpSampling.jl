@@ -36,12 +36,28 @@ function ControlledSDE(sde, u)
     return StochasticDiffEq.SDEProblem(f, g, u0, sde.tspan, sde.p; noise_rate_prototype = nrp, sde.kwargs...)
 end
 
+nocontrol(x, t) = zero(x)
+
 " convenience wrapper for obtaining X[end] and the Girsanov Weight"
-function girsanovsample(cde; kwargs...)
-    sol=solve(cde; kwargs...)
+function girsanovsample(cde, x0; kwargs...)
+    u0 = vcat(x0, 0)
+    sol=solve(cde; u0=u0, kwargs...)
     x = sol[end][1:end-1]
     w = exp(-sol[end][end])
     return x, w
+end
+
+
+# TODO: maybe use DiffEq MC interface
+function girsanovbatch(cde, xs, n)
+    ys = zeros(size(xs)..., n)
+    ws = zeros(size(xs, 2), n)
+    for i in axes(xs, 2)
+        for j in 1:n
+            ys[:, i, j], ws[i, j] = girsanovsample(cde, xs[:, i])
+        end
+    end
+    return ys, ws
 end
 
 
@@ -79,7 +95,7 @@ function (s::Shiftscale)(data, T=1)
     return data .* lambda .+ s.a * (1-lambda)
 end
 
-function revert(s, data, T=1)
+function invert(s, data, T=1)
     lambda = exp(T*s.q)
     return (data .- s.a * (1-lambda)) ./ lambda
 end
@@ -103,7 +119,7 @@ function optcontrol(chi, S::Shiftscale, T, sigma)
     function u(x,t)
         dlogz = Zygote.gradient(x) do x
             lambda = exp(q*(T-t))
-            Z = lambda * chi(x) + a*(1-lambda)
+            Z = lambda * chi(x)[1] + a*(1-lambda)
             log(Z)
         end[1]
         return sigma' * dlogz
