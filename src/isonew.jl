@@ -1,0 +1,91 @@
+
+import Flux
+import StatsBase
+
+function densenet(layers=[1,5,5,1])
+    Flux.Chain([Flux.Dense(layers[i], layers[i+1], Flux.sigmoid) for i in 1:length(layers)-1]...)
+end
+
+densenet(dynamics::AbstractLangevin, layers=[5,5]) = densenet([dim(dynamics); layers; 1])
+
+function isokann(dynamics; model=densenet(dynamics),
+                 nx=10, nkoop=10, poweriter=10, learniter=10,
+                 opt=Flux.ADAM(0.01), cb=Flux.throttle(plot_callback,1,trailing=true))
+
+    xs = randx0(dynamics, nx)
+    sde = SDEProblem(dynamics)
+    cde = ControlledSDE(sde, nocontrol)
+    ps = Flux.params(model)
+    stds = Float64[]
+    ls = Float64[]
+    local S
+
+    for _ in 1:poweriter
+        # evaluate koopman
+        ys, ws = girsanovbatch(cde, xs, nkoop)
+        cs = model(ys)
+        ks, std = vec.(StatsBase.mean_and_std(cs[1,:,:].*ws, 2))
+        #ks = mean(cs[1,:,:] .* ws, dims=2) |> vec
+
+        # estimate shift scale
+        S = Shiftscale(ks)
+        target = invert(S, ks)
+
+        # train network
+        for j in 1:learniter
+            loss() = sum(abs2, (model(xs)|>vec) .- target)
+            l, grad = Flux.withgradient(loss, ps)
+            Flux.update!(opt, ps, grad)
+            push!(ls, l)
+            push!(stds, mean(std))
+        end
+
+        cb(;losses=ls, model, xs, target, stds, std, cs)
+
+        # update controls
+        control = optcontrol(model, S, sde)
+        cde = ControlledSDE(sde, control)
+
+        # resample xs uniformly along chi
+        xys = hcat(xs, reshape(ys, size(xs, 1), :))
+        cs = model(xys) |> vec
+        xs = humboldtsample(xys, cs, nx)
+    end
+    return model, ls, S
+end
+
+function plot_callback(; kwargs...)
+    (;losses, model, xs, target, std, stds) = NamedTuple(kwargs)
+
+    p1=plot(yaxis=:log, title="loss", legend=:bottomleft)
+    plot!(p1, sqrt.(losses), label="loss")
+    plot!(p1, vec(stds), label="std")
+
+    if length(xs) > 0
+        if size(xs, 1) == 1
+            p2=plot(ylims=(-.1,1.1), title="fit",  legend=:best)
+            plot!(p2, x->model([x])[1], -3:.1:3, label="χ")
+            scatter!(p2, vec(xs), vec(target), yerror=vec(std), label="SKχ")
+        else
+            p2 = contour(-2:.1:2, -2:.1:2, (x,y)->model( [x,y])[1], fill=true, alpha=.1)
+            l = vec(mapslices(model, xs, dims=1)) - target
+            #xs = reduce(hcat, xs)'
+            scatter!(p2, xs[:,1], xs[:,2], markersize=l.^2 * 100)
+        end
+    end
+
+    plot(p1, p2) |> display
+end
+
+function test_isokann()
+    for dynamics in [Doublewell(1,1.), Doublewell(2, 1.)]
+        nx = 10
+        nkoop = 10
+        poweriter = 10
+        learniter = 10
+        opt = Flux.ADAM(0.01)
+        model = densenet([dim(dynamics), 5, 5, 1])
+
+        isokann(dynamics, model, nx, nkoop, poweriter, learniter, opt)
+    end
+end

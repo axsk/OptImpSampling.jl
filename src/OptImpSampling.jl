@@ -3,6 +3,10 @@ module OptImpSampling
 include("langevin.jl")
 include("control.jl")
 
+include("humboldtsample.jl")
+include("isonew.jl")
+
+
 include("sqra.jl")
 include("ociso.jl")
 include("isokann.jl")

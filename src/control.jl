@@ -54,7 +54,7 @@ function girsanovbatch(cde, xs, n)
     ws = zeros(size(xs, 2), n)
     for i in axes(xs, 2)
         for j in 1:n
-            ys[:, i, j], ws[i, j] = girsanovsample(cde, xs[:, i])
+            ys[:, i, j], ws[i, j] = girsanovsample(deepcopy(cde), xs[:, i])
         end
     end
     return ys, ws
