@@ -64,7 +64,8 @@ end
 " optcontrol(chis, Q, T, sigma, i)
 
 optimal control u(x,t) = -∇log(Z)
-for Z = Kχᵢ if Kχ = exp(Qt) χ"
+for Z = Kχᵢ if Kχ = exp(Qt) χ.
+Given it terms of the known generator Q"
 function optcontrol(chis, Q, T, sigma, i)
     function u(x,t)
         dlogz = Zygote.gradient(x) do x
@@ -108,10 +109,6 @@ then Kᵀχ = λχ + a(1-λ)1
 given minima and maxima of Kᵀχ we can estimate λ and a
 and therefore compute the optimal control for Kχ = E[χ]
 u* = -σᵀ∇Φ = σᵀ∇log(Kχ) "
-function optcontrol(chi, kchi::Array, T, sigma)
-    S = Shiftscale(kchi, T)
-    optcontrol(chi, S, T, sigma)
-end
 
 function optcontrol(chi, S::Shiftscale, T, sigma)
     a, q = S.a, S.q
@@ -125,6 +122,13 @@ function optcontrol(chi, S::Shiftscale, T, sigma)
         return sigma' * dlogz
     end
     return u
+end
+
+# convenience wrapper using the original sde to extract noise and T
+function optcontrol(model, S::Shiftscale, sde)
+    sigma = sde.g(nothing, nothing, nothing)
+    T = sde.tspan[end]
+    optcontrol(model, S, T, sigma)
 end
 
 ### Tests
@@ -143,8 +147,9 @@ function test_compare_controls()
 
     q = -1.
     b = 0.
-    o0 = ProblemOptChi(chi=chi, q=q, b=b, forcing=0, T=T)
 
+    # generate samples and estimate old way
+    o0 = ProblemOptChi(chi=chi, q=q, b=b, forcing=0, T=T)
     kxs, std, λ, b, ys = SK(o0, xs, 3)
     q = log(λ)
 
@@ -153,6 +158,10 @@ function test_compare_controls()
 
     o1 = ProblemOptChi(chi=chi, q=q, b=b, forcing=1, T=T)
     c1 = control(o1, x, T)
-    c2 = optcontrol(chi, cs, T, o1.σ)(x, T)
+
+    # new way
+    S = Shiftscale(cs, T)
+    u2 = optcontrol(chi, S, T, o1.σ)
+    @show c2 = u2(x, T)
     @assert c1 == c2
 end
