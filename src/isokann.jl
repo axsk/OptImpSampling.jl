@@ -2,9 +2,10 @@
 
 using Flux
 
+# TODO: we want only one mlp function, an thats the one who has the 1 at the end explicitly
 function mlp(x=[1,3,3], sig=true)
     last = sig ? Dense(x[end], 1, σ) : Dense(x[end], 1)
-    Chain([Dense(x[i], x[i+1], σ) for i = 1:length(x)-1]..., last, first)#, x->(x+1)/2)
+    Chain([Dense(x[i], x[i+1], σ) for i = 1:length(x)-1]..., last)#, x->(x+1)/2)
 end
 
 # shiftscale which also scales stds and returns shift and rate
@@ -107,6 +108,49 @@ function run(iso::AIsokann; liveplot=0, humboldt=true, hotfixbnd=false)
     # TODO: find means to plot on demand
     #display(plt)
     iso, (ls, stds)
+end
+
+function isokann(iso)
+    ;dynamics, model, nx, nkoop, poweriter, learniter, opt = iso
+    xs = randx0(dynamics, nx)
+    sde = SDEProblem(dynamics)
+    cde = ControlledSDE(sde, nocontrol)
+    T = 1.
+    sigma = dynamics.σ
+
+    for i in 1:poweriter
+
+        ys, ws = girsanovbatch(cde, xs, nkoop)
+        cs = model(ys)
+        ks = mean(cs[1,:,:] .* ws, dims=2)
+        S = Shiftscale(ks)
+
+
+        control = optcontrol(model, S, T, sigma)
+
+        Flux.train!(Flux.params(model), [], opt) do
+            sum(abs2, model(xs) - invert(S, ks))
+        end
+
+
+        cde = ControlledSDE(sde, control)
+        #xs = humboldtsample(model, vcat(xs, ys), nx)
+    end
+    return model
+end
+
+function test_isokann()
+    for dynamics in [Doublewell(1,1.), Doublewell(2, 1.)]
+        nx = 10
+        nkoop = 10
+        poweriter = 10
+        learniter = 10
+        opt = ADAM(0.01)
+        model = mlp([dim(dynamics), 5,5])
+
+        iso = (; dynamics, model, nx, nkoop, poweriter, learniter, opt)
+        isokann(iso)
+    end
 end
 
 """ single supervised learning iteration """

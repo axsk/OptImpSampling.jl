@@ -1,7 +1,7 @@
 module OptImpSampling
 
-#include("langevin.jl")
-#include("controlledproblem.jl")
+include("langevin.jl")
+include("control.jl")
 
 include("sqra.jl")
 include("ociso.jl")

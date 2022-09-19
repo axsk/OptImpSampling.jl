@@ -27,7 +27,7 @@ zgrad(f,x) = Zygote.gradient(f, x)[1]
 
 grad(f, x) = fgrad(f, x)
 
-doublewell(x) = ((x[1])^2 - 1) ^ 2
+#doublewell(x) = ((x[1])^2 - 1) ^ 2
 
 function triplewell(u)
     x, y = u
