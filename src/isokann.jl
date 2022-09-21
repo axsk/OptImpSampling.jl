@@ -27,7 +27,8 @@ function SK(ocp, xs::AbstractVector, nmc=10)
     ys = zeros(length(xs), length(xs[1]), nmc)
     chis = zeros(length(xs), nmc)
     # TODO @threads zip(xs, 1:nmc) -> matrix
-    Threads.@threads for i in eachindex(xs)
+    #Threads.@threads
+    @floop for i in eachindex(xs)
         yy, cc, ws = prop_and_evaluate(deepcopy(ocp), xs[i], nmc)
         ys[i,:,:] = yy
         chis[i, :]  = cc
@@ -48,7 +49,7 @@ abstract type AIsokann end
     learniter = 10
     opt = Flux.ADAM(0.01)
     model = mlp()
-    forcing = 0.
+    forcing = 1.
     dt = .01
     ls = Float64[]
     stds = Float64[]
@@ -76,6 +77,7 @@ function run(iso::AIsokann; liveplot=0, humboldt=true, hotfixbnd=false)
     learnrate = 1
     local plt
     xs = sample(UniformSampler(-2,2,nx), dim(iso.potential))
+    local ocp
     for i in 1:poweriter
         if hotfixbnd
             xs = [xs; [[-2.], [2.]]]  # hotfix for infering λ, b with small samplings
@@ -108,7 +110,7 @@ function run(iso::AIsokann; liveplot=0, humboldt=true, hotfixbnd=false)
     end
     # TODO: find means to plot on demand
     #display(plt)
-    iso, (ls, stds)
+    iso, (ls, stds), ocp
 end
 
 

@@ -1,7 +1,9 @@
 using StochasticDiffEq: is_diagonal_noise
+using FLoops: @floop
 
 # b + σu
-function controlled_drift(D, xg, p, t; f=nothing, g=nothing, u=nothing, diag=false)
+function controlled_drift(D, xg, p, t;
+        f::F=nothing, g::G=nothing, u::H=nothing, diag=false) where {F,G,H}
     x = @view xg[1:end-1]
     ux = u(x, t)
     sigma = g(x,p,t)
@@ -13,27 +15,49 @@ function controlled_drift(D, xg, p, t; f=nothing, g=nothing, u=nothing, diag=fal
     D[end] = sum(abs2, ux) / 2
 end
 
-function controlled_noise(D, xg, p, t; g=nothing, u=nothing, diag=false)
+function controlled_noise(D, xg, p, t;
+        g::G=nothing, u::H=nothing, diag=false) where {G,H}
     x = @view xg[1:end-1]
+    D .= 0
     if diag
-        D[diagind(D)] .= g(x,p,t)
+        D[diagind(D)[1:end-1]] .= g(x,p,t)
     else
-        D[1:end-1, :] .= g(x,p,t)
+        D[1:end-1, 1:end-1] .= g(x,p,t)
     end
-    D[end, 1:end] .= u(x, t)  # eq. (19)
+    D[end, 1:end-1] .= u(x, t)  # eq. (19)
 end
 
-ControlledSDE(l::AbstractLangevin, u) = ControlledSDE(SDEProblem(l), u)
-
-function ControlledSDE(sde, u)
+function ControlledSDE(sde, u::F) where F
     n = length(sde.u0)
-    nrp = zeros(n+1, n)
-    diag = is_diagonal_noise(sde)
-    f(D,x,p,t) = controlled_drift(D,x,p,t, f=sde.f, g=sde.g, u=u, diag=diag)
-    g(D,x,p,t) = controlled_noise(D,x,p,t, g=sde.g, u=u, diag=diag)
+    nrp = zeros(n+1, n+1)
     u0 = vcat(sde.u0, 0)
 
-    return StochasticDiffEq.SDEProblem(f, g, u0, sde.tspan, sde.p; noise_rate_prototype = nrp, sde.kwargs...)
+    #diag = is_diagonal_noise(sde)
+    # f(D,x,p,t) = controlled_drift(D,x,p,t, f=sde.f, g=sde.g, u=u, diag=diag)
+    # g(D,x,p,t) = controlled_noise(D,x,p,t, g=sde.g, u=u, diag=diag)
+
+    function f(D,x,p,t)
+        x = SVector{1}(@view x[1:end-1])
+
+        fx = sde.f(x,p,t)
+        gx = sde.g(x,p,t)
+        ux = u(x,t)
+        D[1:end-1] .= fx .+ gx .* ux
+        D[end] = sum(abs2, ux)
+    end
+    function g(D,x,p,t)
+        x = SVector{1}(@view x[1:end-1])
+        gx = sde.g(x,p,t)
+        ux = u(x,t)
+        D .= 0
+        for i in eachindex(x)
+            D[i,i] = gx
+        end
+        D[end, 1:end-1] .= ux
+    end
+
+    return StochasticDiffEq.SDEProblem(f, g, u0, sde.tspan, sde.p;
+        noise_rate_prototype = nrp, sde.kwargs...)
 end
 
 nocontrol(x, t) = zero(x)
@@ -47,19 +71,16 @@ function girsanovsample(cde, x0; kwargs...)
     return x, w
 end
 
-
 # TODO: maybe use DiffEq MC interface
 function girsanovbatch(cde, xs, n)
-    ys = zeros(size(xs)..., n)
-    ws = zeros(size(xs, 2), n)
-    for i in axes(xs, 2)
-        for j in 1:n
-            ys[:, i, j], ws[i, j] = girsanovsample(deepcopy(cde), xs[:, i])
-        end
+    dim, nx = size(xs)
+    ys = zeros(dim, nx, n)
+    ws = zeros(nx, n)
+    @floop for i in 1:nx, j in 1:n
+            ys[:, i, j], ws[i, j] = girsanovsample(cde, xs[:, i])
     end
     return ys, ws
 end
-
 
 " optcontrol(chis, Q, T, sigma, i)
 
@@ -84,9 +105,9 @@ struct Shiftscale
 end
 
 function Shiftscale(data::AbstractArray, T=1)
-    min, max = extrema(data)
-    lambda = max-min
-    a = min/(1-lambda)
+    a, b = extrema(data)
+    lambda = b-a
+    a = a/(1-lambda)
     q = log(lambda) / T
     return Shiftscale(a, q)
 end
@@ -110,15 +131,14 @@ given minima and maxima of Kᵀχ we can estimate λ and a
 and therefore compute the optimal control for Kχ = E[χ]
 u* = -σᵀ∇Φ = σᵀ∇log(Kχ) "
 
-function optcontrol(chi, S::Shiftscale, T, sigma)
-    a, q = S.a, S.q
-
+function optcontrol(chi::F, S::Shiftscale, T, sigma) where F
     function u(x,t)
-        dlogz = Zygote.gradient(x) do x
-            lambda = exp(q*(T-t))
-            Z = lambda * chi(x)[1] + a*(1-lambda)
+        #x = SVector{length(x)}(x)
+        dlogz = fgrad(x) do x
+            lambda = exp(S.q*(T-t))
+            Z = lambda * first(chi(x)) + S.a*(1-lambda)
             log(Z)
-        end[1]
+        end #:: Vector{Float64}  # TODO: this should be inferred!
         return sigma' * dlogz
     end
     return u
@@ -135,8 +155,16 @@ end
 
 function test_ControlledSDE()
     sde = SDEProblem(Doublewell())
-    cde = ControlledSDE(sde, (x,t)->0.)
-    koopmansample(cde, u0=[1., 2.])
+    cde = ControlledSDE(sde, nocontrol)
+    ys, ws = girsanovbatch(cde, rand(1,2), 3)
+end
+
+function test_optcontrol()
+    sde = SDEProblem(Doublewell())
+    model = densenet([1,3,3,1])
+    u = optcontrol(model, Shiftscale(1,0), 1, 1)
+    cde = ControlledSDE(sde, u)
+    ys, ws = girsanovbatch(cde, rand(1,2), 3)
 end
 
 function test_compare_controls()
@@ -164,4 +192,16 @@ function test_compare_controls()
     u2 = optcontrol(chi, S, T, o1.σ)
     @show c2 = u2(x, T)
     @assert c1 == c2
+
+
+    s1 = SDEProblem(o1, x)
+    s2 = ControlledSDE(SDEProblem(Doublewell()), u2)
+
+    d0 = copy(x)
+    @show s2.f(d0, x, nothing, 0)
+    @show d0
+
+    du = copy(x)
+    @show controlled_drift(du, x, o1, 0)
+    @show du
 end

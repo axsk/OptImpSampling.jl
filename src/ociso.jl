@@ -55,6 +55,8 @@ end
 
 ProblemOptChi = ProblemOptChi11
 
+ProblemOptControl(model, S::Shiftscale) = ProblemOptChi(chi=x->first(model(x)), q = S.q, b=S.a)
+
 Sigma(sigma) = similar(sigma, size(sigma).+1 ...)
 
 derivatives(U, chi, x) = (; dU = Diff(U, x), dchi = Diff(chi, x))
@@ -163,6 +165,17 @@ function prop_and_evaluate(p::ProblemOptControl, x0::AbstractVector, n)
     return ys, chis, ws
 end
 
+
+
+function prop_and_evaluate_new(ocp::ProblemOptControl, x0::AbstractVector, n)
+    sde=SDEProblem(Doublewell())
+    cde = ControlledSDE(sde, optcontrol(ocp.chi, Shiftscale(ocp.b, ocp.q), sde))
+    ys, ws = girsanovbatch(cde, reshape(x0, :, 1),n)
+    ys = reshape(ys, :, n)
+    ws = vec(ws)
+    chis = mapslices(ocp.chi, ys, dims=1)
+    return ys, chis, ws
+end
 
 ## Plots
 

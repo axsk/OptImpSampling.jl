@@ -2,25 +2,29 @@
 import Flux
 import StatsBase
 
-function densenet(layers=[1,5,5,1])
+function densenet(layers=[1,3,3,1])
     Flux.Chain([Flux.Dense(layers[i], layers[i+1], Flux.sigmoid) for i in 1:length(layers)-1]...)
 end
 
 densenet(dynamics::AbstractLangevin, layers=[5,5]) = densenet([dim(dynamics); layers; 1])
 
 function isokann(dynamics; model=densenet(dynamics),
-                 nx=10, nkoop=10, poweriter=10, learniter=10,
+                 nx=10, nkoop=10, poweriter=100, learniter=10, dt=0.01, alg=SROCK2(),
                  opt=Flux.ADAM(0.01), cb=Flux.throttle(plot_callback,1,trailing=true))
 
     xs = randx0(dynamics, nx)
-    sde = SDEProblem(dynamics)
-    cde = ControlledSDE(sde, nocontrol)
+    sde = SDEProblem(dynamics, dt = dt, alg=alg)
+
     ps = Flux.params(model)
     stds = Float64[]
     ls = Float64[]
-    local S
+    local S, cde
+    control = nocontrol
 
     for _ in 1:poweriter
+
+        cde = ControlledSDE(sde, control)
+
         # evaluate koopman
         ys, ws = girsanovbatch(cde, xs, nkoop)
         cs = model(ys)
@@ -30,10 +34,11 @@ function isokann(dynamics; model=densenet(dynamics),
         # estimate shift scale
         S = Shiftscale(ks)
         target = invert(S, ks)
+        std = std ./ exp(S.q) / sqrt(nkoop)
 
         # train network
         for j in 1:learniter
-            loss() = sum(abs2, (model(xs)|>vec) .- target)
+            loss() = mean(abs2, (model(xs)|>vec) .- target)
             l, grad = Flux.withgradient(loss, ps)
             Flux.update!(opt, ps, grad)
             push!(ls, l)
@@ -43,15 +48,14 @@ function isokann(dynamics; model=densenet(dynamics),
         cb(;losses=ls, model, xs, target, stds, std, cs)
 
         # update controls
-        control = optcontrol(model, S, sde)
-        cde = ControlledSDE(sde, control)
+        control = optcontrol(statify(model), S, sde)
 
         # resample xs uniformly along chi
         xys = hcat(xs, reshape(ys, size(xs, 1), :))
         cs = model(xys) |> vec
         xs = humboldtsample(xys, cs, nx)
     end
-    return model, ls, S
+    return (;model, ls, S, sde, cde, xs, dynamics)
 end
 
 function plot_callback(; kwargs...)

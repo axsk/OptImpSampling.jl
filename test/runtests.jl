@@ -7,3 +7,9 @@ function testall()
 end
 
 testall()
+
+import OptImpSampling
+# control
+OptImpSampling.test_ControlledSDE()
+OptImpSampling.test_optcontrol()
+OptImpSampling.test_compare_controls()
