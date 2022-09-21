@@ -13,3 +13,8 @@ import OptImpSampling
 OptImpSampling.test_ControlledSDE()
 OptImpSampling.test_optcontrol()
 OptImpSampling.test_compare_controls()
+
+using OptImpSampling: isokann, Doublewell
+
+isokann(Doublewell())
+#isokann(Doublewell(dim=2))  # TODO: this fails because of the fixed SVector dimension

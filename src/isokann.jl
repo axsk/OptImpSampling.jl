@@ -47,7 +47,7 @@ abstract type AIsokann end
     nmc = 10
     poweriter = 100
     learniter = 10
-    opt = Flux.ADAM(0.01)
+    opt = Flux.Adam(0.01)
     model = mlp()
     forcing = 1.
     dt = .01
@@ -64,8 +64,8 @@ end
 
 sample(s::UniformSampler, dim=1) = [rand(dim) * (s.max-s.min) .+ s.min for i in 1:s.n]
 
-converging() = Isokann(poweriter=1000, learniter=100, nmc=100, forcing=1, opt=ADAM(0.001), model=mlp([1,3,3], false), dt=.01)
-happy1() = Isokann(nx=30, poweriter=100, learniter=100, nmc=3, forcing=1., opt= ADAM(0.01), dt=0.01)
+converging() = Isokann(poweriter=1000, learniter=100, nmc=100, forcing=1, opt=Adam(0.001), model=mlp([1,3,3], false), dt=.01)
+happy1() = Isokann(nx=30, poweriter=100, learniter=100, nmc=3, forcing=1., opt= Adam(0.01), dt=0.01)
 basic2d() = Isokann(model=mlp([2,5,5]), potential=triplewell)
 better2d() = Isokann(model=mlp([2,5,5,5]), potential=triplewell, forcing=1, dt=0.001)
 
@@ -83,7 +83,7 @@ function run(iso::AIsokann; liveplot=0, humboldt=true, hotfixbnd=false)
             xs = [xs; [[-2.], [2.]]]  # hotfix for infering λ, b with small samplings
         end
         chi = statify(model)
-        ocp = ProblemOptChi(chi=chi, q=q, b=b, forcing=forcing, dt=dt, potential=iso.potential)
+        ocp = OptChiControl(chi=chi, q=q, b=b, forcing=forcing, dt=dt, potential=iso.potential)
 
         if humboldt
             xs = humboldtsample(xs, ocp, nx, 10)

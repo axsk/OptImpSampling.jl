@@ -2,7 +2,7 @@
 # we start with fin elems / linear interp. of the eigenfunction
 # and testing optimal sampling under the new criterion
 
-export ProblemOptChi, doublewell, triplewell, msolve, evaluate, mean_and_std
+export OptChiControl, doublewell, triplewell, msolve, evaluate, mean_and_std
 
 #using Flux
 using DifferentialEquations
@@ -41,8 +41,8 @@ end
 dim(::typeof(doublewell)) = 1
 dim(::typeof(triplewell)) = 2
 
-abstract type ProblemOptControl end
-@with_kw mutable struct ProblemOptChi11{N, P, C, NN} <: ProblemOptControl
+
+@with_kw mutable struct OptChiControl{N, P, C, NN}
     potential::P             = doublewell
     T::Float64               = 1              # lag-time
     σ::SMatrix{N,N, Float64, NN} = SMatrix{dim(potential),dim(potential),Float64}(I)      # noise
@@ -53,15 +53,13 @@ abstract type ProblemOptControl end
     forcing::Float64         = 1.
 end
 
-ProblemOptChi = ProblemOptChi11
-
-ProblemOptControl(model, S::Shiftscale) = ProblemOptChi(chi=x->first(model(x)), q = S.q, b=S.a)
+OptChiControl(model, S::Shiftscale) = OptChiControl(chi=x->first(model(x)), q = S.q, b=S.a)
 
 Sigma(sigma) = similar(sigma, size(sigma).+1 ...)
 
 derivatives(U, chi, x) = (; dU = Diff(U, x), dchi = Diff(chi, x))
 
-#ProblemOptChi(chi, q, b) = ProblemOptChi4(doublewell, 1., ones(1,1), collect(Diagonal([1.,0])), chi, q, b, 0.01, 1.)
+#OptChiControl(chi, q, b) = OptChiControl4(doublewell, 1., ones(1,1), collect(Diagonal([1.,0])), chi, q, b, 0.01, 1.)
 
 function plot_grad_and_u(p, grid=-2:.05:2)
     plot(grid, x->grad(p.chi, [x])[1], label="grad")
@@ -72,10 +70,10 @@ function ProblemOptSqra(;step=0.1, grid=-2:step:2, kwargs...)
     f, v, q = eigenfunction_sqra(grid=grid)
     b = -minimum(v) + .1
     chi(x) = f(x[1]) + b
-    ProblemOptChi(chi=chi, q=q, b=b; kwargs...)
+    OptChiControl(chi=chi, q=q, b=b; kwargs...)
 end
 
-function control(p::ProblemOptChi{N}, x::AbstractVector, t) where {N}
+function control(p::OptChiControl{N}, x::AbstractVector, t) where {N}
     control(x, t, p.T, p.σ, p.chi, p.q, p.b, p.forcing, Val(N))
 end
 
@@ -96,9 +94,9 @@ function control(x, t, T, σ, χ, q, b, forcescale, _::Val{N}) where {N}
     return u
 end
 
-statify(p::ProblemOptChi{N}, x::AbstractVector) where {N} = SVector{N}(x)
+statify(p::OptChiControl{N}, x::AbstractVector) where {N} = SVector{N}(x)
 
-function controlled_drift(du, xg::Vector{Float64}, p::ProblemOptControl, t)
+function controlled_drift(du, xg::Vector{Float64}, p::OptChiControl, t)
     x = statify(p, @view xg[1:end-1])
     u = control(p, x, t)
     du[1:end-1] = - grad(p.potential, x)
@@ -106,24 +104,24 @@ function controlled_drift(du, xg::Vector{Float64}, p::ProblemOptControl, t)
     du[end] = sum(abs2, u) / 2  # eq. (19)
 end
 
-function controlled_noise(dg, xg, p::ProblemOptControl, t)
+function controlled_noise(dg, xg, p::OptChiControl, t)
     x = statify(p, @view xg[1:end-1])
     dg[1:end-1, 1:end-1] .= p.σ  # eq. (5)
     dg[end, 1:end-1] .= control(p, x, t)  # eq. (19)
     dg[:, end] .= 0
 end
 
-function SDEProblem(p::ProblemOptControl, x0)
+function SDEProblem(p::OptChiControl, x0)
     StochasticDiffEq.SDEProblem(controlled_drift, controlled_noise,
         [x0; 0.], (0., p.T), p, noise_rate_prototype = Sigma(p.σ))
 end
 
-function msolve(p::ProblemOptControl, x0; solver=SROCK2(), dt=p.dt)
+function msolve(p::OptChiControl, x0; solver=SROCK2(), dt=p.dt)
     prob = SDEProblem(p, x0)
     solve(prob, solver, dt=dt)
 end
 
-function msolve(p::ProblemOptControl, x0, n, solver=SROCK2())
+function msolve(p::OptChiControl, x0, n, solver=SROCK2())
     prob = SDEProblem(p, x0)  # custom SDEProblem constructor
     #=
     @time int = init(prob, solver, dt=p.dt)
@@ -138,7 +136,7 @@ end
 
 
 
-function evaluate(p::ProblemOptControl, x0::AbstractVector, n)
+function evaluate(p::OptChiControl, x0::AbstractVector, n)
     return map(msolve(p, x0, n)) do s
         x = @view s[1:end-1]
         @assert all(isfinite.(x))
@@ -150,9 +148,9 @@ function evaluate(p::ProblemOptControl, x0::AbstractVector, n)
     end
 end
 
-evaluate(p::ProblemOptControl, x0::AbstractVector) = evaluate(p, x0, 1)[1]
+evaluate(p::OptChiControl, x0::AbstractVector) = evaluate(p, x0, 1)[1]
 
-function prop_and_evaluate(p::ProblemOptControl, x0::AbstractVector, n)
+function prop_and_evaluate(p::OptChiControl, x0::AbstractVector, n)
     d = length(x0)
     ys = similar(x0, d, n)
     ws = zeros(n)
@@ -167,7 +165,7 @@ end
 
 
 
-function prop_and_evaluate_new(ocp::ProblemOptControl, x0::AbstractVector, n)
+function prop_and_evaluate_new(ocp::OptChiControl, x0::AbstractVector, n)
     sde=SDEProblem(Doublewell())
     cde = ControlledSDE(sde, optcontrol(ocp.chi, Shiftscale(ocp.b, ocp.q), sde))
     ys, ws = girsanovbatch(cde, reshape(x0, :, 1),n)
@@ -205,13 +203,13 @@ end
 
 ## Utility functions
 
-function plot(p::ProblemOptControl, sol)
+function plot(p::OptChiControl, sol)
     plot(sol, label = ["X_t" "G"])
     plot!(sol.t, control(p, sol), label = "u") |> display
 end
 
 
-function control(p::ProblemOptControl, sol::SciMLBase.AbstractODESolution)
+function control(p::OptChiControl, sol::SciMLBase.AbstractODESolution)
     us = []
     for (t,u) in zip(sol.t, sol.u)
         u = control(p, u[1:end-1], t)
@@ -220,7 +218,7 @@ function control(p::ProblemOptControl, sol::SciMLBase.AbstractODESolution)
     return us
 end
 
-mean_and_std(p::ProblemOptControl, x0, n) = mean_and_std(evaluate(p, x0, n))
+mean_and_std(p::OptChiControl, x0, n) = mean_and_std(evaluate(p, x0, n))
 
 ## Eigenfunction via SQRA
 
@@ -232,17 +230,17 @@ function eigenfunction_sqra(; grid=-2:.2:2, potential=doublewell, sigma=1)
     val, vec = eigs(Q, which=:SM, nev=2)
     vec = vec[:,2] |> real
     val = val[2] |> real
-    int = CubicSplineInterpolation(grid, vec, extrapolation_bc=Flat())
+    int = cubic_spline_interpolation(grid, vec, extrapolation_bc=Flat())
     return int, vec, val
 end
 
 ### DEPRECATED: computation of eigenfunction by ulam (sqra is faster)
 
-function ProblemOptChiUlam(; n=300)
+function OptChiControlUlam(; n=300)
     f, v, q= eigenfunction(n=n)
     b = -minimum(v) + .1
     chi(x) = f(x[1]) + b
-    ProblemOptChi(chi, q, b)
+    OptChiControl(chi, q, b)
 end
 
 function gridcell(grid, x)

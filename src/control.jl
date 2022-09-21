@@ -37,6 +37,7 @@ function ControlledSDE(sde, u::F) where F
     # g(D,x,p,t) = controlled_noise(D,x,p,t, g=sde.g, u=u, diag=diag)
 
     function f(D,x,p,t)
+        # the SVector is a hotfix to https://github.com/JuliaDiff/ForwardDiff.jl/issues/516
         x = SVector{1}(@view x[1:end-1])
 
         fx = sde.f(x,p,t)
@@ -168,40 +169,14 @@ function test_optcontrol()
 end
 
 function test_compare_controls()
-    chi(x) = (sin(x[1]) + 1.1) / 3
-    xs = [[1.], [0.], [-.1]]
-    x = xs[1]
-    T = 1.
+    model = densenet()
+    S = Shiftscale(0, 0)
 
-    q = -1.
-    b = 0.
+    u = optcontrol(model, S, 1., 1.)
+    c1 = u([1.], 1)
 
-    # generate samples and estimate old way
-    o0 = ProblemOptChi(chi=chi, q=q, b=b, forcing=0, T=T)
-    kxs, std, λ, b, ys = SK(o0, xs, 3)
-    q = log(λ)
+    ocp = OptChiControl(model, S)
+    c2 = control(ocp, [1.], 1.)
 
-    cs = map(chi, ys)
-    x = xs[1]
-
-    o1 = ProblemOptChi(chi=chi, q=q, b=b, forcing=1, T=T)
-    c1 = control(o1, x, T)
-
-    # new way
-    S = Shiftscale(cs, T)
-    u2 = optcontrol(chi, S, T, o1.σ)
-    @show c2 = u2(x, T)
     @assert c1 == c2
-
-
-    s1 = SDEProblem(o1, x)
-    s2 = ControlledSDE(SDEProblem(Doublewell()), u2)
-
-    d0 = copy(x)
-    @show s2.f(d0, x, nothing, 0)
-    @show d0
-
-    du = copy(x)
-    @show controlled_drift(du, x, o1, 0)
-    @show du
 end

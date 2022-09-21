@@ -8,9 +8,12 @@ end
 
 densenet(dynamics::AbstractLangevin, layers=[5,5]) = densenet([dim(dynamics); layers; 1])
 
+# @time isokann(Doublewell) == 1sec
+
 function isokann(dynamics; model=densenet(dynamics),
                  nx=10, nkoop=10, poweriter=100, learniter=10, dt=0.01, alg=SROCK2(),
-                 opt=Flux.ADAM(0.01), cb=Flux.throttle(plot_callback,1,trailing=true))
+                 opt=Flux.Adam(0.01),
+                 sec=Inf, cb=Flux.throttle(plot_callback,sec,leading=false, trailing=true))
 
     xs = randx0(dynamics, nx)
     sde = SDEProblem(dynamics, dt = dt, alg=alg)
@@ -87,7 +90,7 @@ function test_isokann()
         nkoop = 10
         poweriter = 10
         learniter = 10
-        opt = Flux.ADAM(0.01)
+        opt = Flux.Adam(0.01)
         model = densenet([dim(dynamics), 5, 5, 1])
 
         isokann(dynamics, model, nx, nkoop, poweriter, learniter, opt)
