@@ -10,7 +10,7 @@ function controlled_drift(D, xx, p, t, ::Val{n}, f::F, g::G, u::U) where {n,F,G,
     else
         D[1:end-1] .= f(x,p,t) .+ g(x,p,t) .* ux
     end
-    D[end] = sum(abs2, ux)
+    D[end] = sum(abs2, ux) / 2
 end
 
 function controlled_noise(D, xx, p, t, ::Val{n}, g::G, u::U) where {n,G,U}
