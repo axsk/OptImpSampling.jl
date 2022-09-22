@@ -1,4 +1,4 @@
-
+# cleaner and simpler reimplementation of ISOKANN (1)
 import Flux
 import StatsBase
 
@@ -40,7 +40,7 @@ function isokann(dynamics; model=densenet(dynamics),
         std = std ./ exp(S.q) / sqrt(nkoop)
 
         # train network
-        for j in 1:learniter
+        for _ in 1:learniter
             loss() = mean(abs2, (model(xs)|>vec) .- target)
             l, grad = Flux.withgradient(loss, ps)
             Flux.update!(opt, ps, grad)
@@ -82,17 +82,4 @@ function plot_callback(; kwargs...)
     end
 
     plot(p1, p2) |> display
-end
-
-function test_isokann()
-    for dynamics in [Doublewell(1,1.), Doublewell(2, 1.)]
-        nx = 10
-        nkoop = 10
-        poweriter = 10
-        learniter = 10
-        opt = Flux.Adam(0.01)
-        model = densenet([dim(dynamics), 5, 5, 1])
-
-        isokann(dynamics, model, nx, nkoop, poweriter, learniter, opt)
-    end
 end

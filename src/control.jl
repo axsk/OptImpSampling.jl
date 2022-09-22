@@ -1,72 +1,57 @@
-using StochasticDiffEq: is_diagonal_noise
 using FLoops: @floop
 
 # b + σu
-function controlled_drift(D, xg, p, t;
-        f::F=nothing, g::G=nothing, u::H=nothing, diag=false) where {F,G,H}
-    x = @view xg[1:end-1]
-    ux = u(x, t)
-    sigma = g(x,p,t)
-    if diag
-        D[1:end-1] .= f(x, p, t) .+ sigma .* ux
+function controlled_drift(D, xx, p, t, ::Val{n}, f::F, g::G, u::U) where {n,F,G,U}
+    x = SVector{n}(@view xx[1:n])
+    ux = u(x,t)
+    gx = g(x,p,t)
+    if isa(gx, Matrix)
+        D[1:end-1] .= f(x,p,t) .+ g(x,p,t) * ux
     else
-        D[1:end-1] .= f(x, p, t) .+ sigma * ux
+        D[1:end-1] .= f(x,p,t) .+ g(x,p,t) .* ux
     end
-    D[end] = sum(abs2, ux) / 2
+    D[end] = sum(abs2, ux)
 end
 
-function controlled_noise(D, xg, p, t;
-        g::G=nothing, u::H=nothing, diag=false) where {G,H}
-    x = @view xg[1:end-1]
+function controlled_noise(D, xx, p, t, ::Val{n}, g::G, u::U) where {n,G,U}
+    x = SVector{n}(@view xx[1:n])
+    gx = g(x,p,t)
     D .= 0
-    if diag
-        D[diagind(D)[1:end-1]] .= g(x,p,t)
+    if isa(gx, AbstractMatrix)
+        D[1:n, 1:n] .= gx
+    elseif isa(gx, AbstractVector)
+        for i in 1:n
+            D[i,i] = gx[i]
+        end
     else
-        D[1:end-1, 1:end-1] .= g(x,p,t)
-    end
-    D[end, 1:end-1] .= u(x, t)  # eq. (19)
-end
-
-function ControlledSDE(sde, u::F) where F
-    n = length(sde.u0)
-    nrp = zeros(n+1, n+1)
-    u0 = vcat(sde.u0, 0)
-
-    #diag = is_diagonal_noise(sde)
-    # f(D,x,p,t) = controlled_drift(D,x,p,t, f=sde.f, g=sde.g, u=u, diag=diag)
-    # g(D,x,p,t) = controlled_noise(D,x,p,t, g=sde.g, u=u, diag=diag)
-
-    function f(D,x,p,t)
-        # the SVector is a hotfix to https://github.com/JuliaDiff/ForwardDiff.jl/issues/516
-        x = SVector{1}(@view x[1:end-1])
-
-        fx = sde.f(x,p,t)
-        gx = sde.g(x,p,t)
-        ux = u(x,t)
-        D[1:end-1] .= fx .+ gx .* ux
-        D[end] = sum(abs2, ux)
-    end
-    function g(D,x,p,t)
-        x = SVector{1}(@view x[1:end-1])
-        gx = sde.g(x,p,t)
-        ux = u(x,t)
-        D .= 0
-        for i in eachindex(x)
+        for i in 1:n
             D[i,i] = gx
         end
-        D[end, 1:end-1] .= ux
     end
+    D[end, 1:end-1] .= u(x,t)
+end
 
-    return StochasticDiffEq.SDEProblem(f, g, u0, sde.tspan, sde.p;
+# specialize on the dimension of the problem for SVector
+ControlledSDE(sde, u) = ControlledSDE(sde, u, Val(length(sde.u0)))
+
+""" Construct the SDE problem for Girsanov with control u """
+function ControlledSDE(sde, u, ::Val{n}) where {n}
+    nrp = zeros(n+1, n+1)  # we could do with (n+1,n) but SROCK2 only takes square noise
+    u0 = vcat(sde.u0, 0)   # append the girsanov dimension
+
+    drift(D,x,p,t) = controlled_drift(D,x,p,t, Val(n), sde.f, sde.g, u)
+    noise(D,x,p,t) = controlled_noise(D,x,p,t, Val(n), sde.g, u)
+
+    return StochasticDiffEq.SDEProblem(drift, noise, u0, sde.tspan, sde.p;
         noise_rate_prototype = nrp, sde.kwargs...)
 end
 
 nocontrol(x, t) = zero(x)
 
 " convenience wrapper for obtaining X[end] and the Girsanov Weight"
-function girsanovsample(cde, x0; kwargs...)
+function girsanovsample(cde, x0)
     u0 = vcat(x0, 0)
-    sol=solve(cde; u0=u0, kwargs...)
+    sol=solve(cde; u0=u0)
     x = sol[end][1:end-1]
     w = exp(-sol[end][end])
     return x, w
@@ -77,7 +62,7 @@ function girsanovbatch(cde, xs, n)
     dim, nx = size(xs)
     ys = zeros(dim, nx, n)
     ws = zeros(nx, n)
-    @floop for i in 1:nx, j in 1:n
+    @floop for i in 1:nx, j in 1:n  # using @floop allows threaded iteration over i AND j
             ys[:, i, j], ws[i, j] = girsanovsample(cde, xs[:, i])
     end
     return ys, ws

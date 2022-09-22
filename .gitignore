@@ -2,3 +2,4 @@
 *.so
 *.png
 .scratch
+*.cov
