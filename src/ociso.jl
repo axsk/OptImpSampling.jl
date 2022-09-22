@@ -66,12 +66,7 @@ function plot_grad_and_u(p, grid=-2:.05:2)
     plot!(grid, x->control(p, [x],0)[1], label ="u*")
 end
 
-function ProblemOptSqra(;step=0.1, grid=-2:step:2, kwargs...)
-    f, v, q = eigenfunction_sqra(grid=grid)
-    b = -minimum(v) + .1
-    chi(x) = f(x[1]) + b
-    OptChiControl(chi=chi, q=q, b=b; kwargs...)
-end
+
 
 function control(p::OptChiControl{N}, x::AbstractVector, t) where {N}
     control(x, t, p.T, p.σ, p.chi, p.q, p.b, p.forcing, Val(N))
@@ -221,6 +216,13 @@ end
 mean_and_std(p::OptChiControl, x0, n) = mean_and_std(evaluate(p, x0, n))
 
 ## Eigenfunction via SQRA
+
+function ProblemOptSqra(;step=0.1, grid=-2:step:2, e0 = 0.001, kwargs...)
+    f, v, q = eigenfunction_sqra(grid=grid)
+    b = -minimum(v) + e0
+    chi(x) = f(x[1]) + b
+    OptChiControl(chi=chi, q=q, b=b; kwargs...)
+end
 
 function eigenfunction_sqra(; grid=-2:.2:2, potential=doublewell, sigma=1)
     beta = 2 / sigma^2  # Einstein relation

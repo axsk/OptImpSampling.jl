@@ -2,15 +2,13 @@
 import Flux
 import StatsBase
 
-function densenet(layers=[1,3,3,1])
-    Flux.Chain([Flux.Dense(layers[i], layers[i+1], Flux.sigmoid) for i in 1:length(layers)-1]...)
-end
 
-densenet(dynamics::AbstractLangevin, layers=[5,5]) = densenet([dim(dynamics); layers; 1])
 
 # @time isokann(Doublewell) == 1sec
 
-function isokann(dynamics; model=densenet(dynamics),
+fluxnet(dynamics::AbstractLangevin, layers=[5,5]) = fluxnet([dim(dynamics); layers; 1])
+
+function isokann(dynamics; model=fluxnet(dynamics),
                  nx=10, nkoop=10, poweriter=100, learniter=10, dt=0.01, alg=SROCK2(),
                  opt=Flux.Adam(0.01),
                  sec=Inf, cb=Flux.throttle(plot_callback,sec,leading=false, trailing=true))
@@ -57,12 +55,17 @@ function isokann(dynamics; model=densenet(dynamics),
         xys = hcat(xs, reshape(ys, size(xs, 1), :))
         cs = model(xys) |> vec
         xs = humboldtsample(xys, cs, nx)
+        #xs = randx0(dynamics, nx)
     end
     return (;model, ls, S, sde, cde, xs, dynamics)
 end
 
 function plot_callback(; kwargs...)
     (;losses, model, xs, target, std, stds) = NamedTuple(kwargs)
+
+    let sqrloss = sqrt(losses[end]), std=stds[end]
+        @show sqrloss, std
+    end
 
     p1=plot(yaxis=:log, title="loss", legend=:bottomleft)
     plot!(p1, sqrt.(losses), label="loss")

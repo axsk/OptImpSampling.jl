@@ -31,10 +31,11 @@ end
 
 given a list of values `ys`, return `n`` indices `is` such that `ys[is]` are approximately uniform by
 picking the closest points to a randomly perturbed grid in [0,1]."
-function subsample_uniformgrid(ys, n)
-    #n = n - 2
+function subsample_uniformgrid(ys, n, keepedges=true)
+
+    keepedges && (n = n - 2)
     needles = (rand(n)  .+ (0:n-1)) ./ n
-    #needles = [[0,1]; needles]
+    keepedges && (needles = [[0,1]; needles])
     pickclosest(ys, needles)
 end
 

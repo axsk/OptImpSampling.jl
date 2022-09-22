@@ -147,14 +147,14 @@ end
 
 function test_optcontrol()
     sde = SDEProblem(Doublewell())
-    model = densenet([1,3,3,1])
+    model = fluxnet([1,3,3,1])
     u = optcontrol(model, Shiftscale(1,0), 1, 1)
     cde = GirsanovSDE(sde, u)
     ys, ws = girsanovbatch(cde, rand(1,2), 3)
 end
 
 function test_compare_controls()
-    model = densenet()
+    model = fluxnet()
     S = Shiftscale(0, 0)
 
     u = optcontrol(model, S, 1., 1.)
