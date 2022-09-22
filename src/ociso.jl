@@ -167,7 +167,7 @@ end
 
 function prop_and_evaluate_new(ocp::OptChiControl, x0::AbstractVector, n)
     sde=SDEProblem(Doublewell())
-    cde = ControlledSDE(sde, optcontrol(ocp.chi, Shiftscale(ocp.b, ocp.q), sde))
+    cde = GirsanovSDE(sde, optcontrol(ocp.chi, Shiftscale(ocp.b, ocp.q), sde))
     ys, ws = girsanovbatch(cde, reshape(x0, :, 1),n)
     ys = reshape(ys, :, n)
     ws = vec(ws)

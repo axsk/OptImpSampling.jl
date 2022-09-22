@@ -10,7 +10,7 @@ testall()
 
 import OptImpSampling
 # control
-OptImpSampling.test_ControlledSDE()
+OptImpSampling.test_GirsanovSDE()
 OptImpSampling.test_optcontrol()
 OptImpSampling.test_compare_controls()
 

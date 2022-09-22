@@ -32,10 +32,10 @@ function controlled_noise(D, xx, p, t, ::Val{n}, g::G, u::U) where {n,G,U}
 end
 
 # specialize on the dimension of the problem for SVector
-ControlledSDE(sde, u) = ControlledSDE(sde, u, Val(length(sde.u0)))
+GirsanovSDE(sde, u) = GirsanovSDE(sde, u, Val(length(sde.u0)))
 
 """ Construct the SDE problem for Girsanov with control u """
-function ControlledSDE(sde, u, ::Val{n}) where {n}
+function GirsanovSDE(sde, u, ::Val{n}) where {n}
     nrp = zeros(n+1, n+1)  # we could do with (n+1,n) but SROCK2 only takes square noise
     u0 = vcat(sde.u0, 0)   # append the girsanov dimension
 
@@ -139,9 +139,9 @@ end
 
 ### Tests
 
-function test_ControlledSDE()
+function test_GirsanovSDE()
     sde = SDEProblem(Doublewell())
-    cde = ControlledSDE(sde, nocontrol)
+    cde = GirsanovSDE(sde, nocontrol)
     ys, ws = girsanovbatch(cde, rand(1,2), 3)
 end
 
@@ -149,7 +149,7 @@ function test_optcontrol()
     sde = SDEProblem(Doublewell())
     model = densenet([1,3,3,1])
     u = optcontrol(model, Shiftscale(1,0), 1, 1)
-    cde = ControlledSDE(sde, u)
+    cde = GirsanovSDE(sde, u)
     ys, ws = girsanovbatch(cde, rand(1,2), 3)
 end
 

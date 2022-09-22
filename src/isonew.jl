@@ -26,7 +26,7 @@ function isokann(dynamics; model=densenet(dynamics),
 
     for _ in 1:poweriter
 
-        cde = ControlledSDE(sde, control)
+        cde = GirsanovSDE(sde, control)
 
         # evaluate koopman
         ys, ws = girsanovbatch(cde, xs, nkoop)
