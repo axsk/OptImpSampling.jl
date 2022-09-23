@@ -43,7 +43,7 @@ abstract type AIsokann end
     poweriter = 100
     learniter = 10
     opt = Flux.Adam(0.01)
-    model = fluxnet()
+    model = fluxnet1()
     forcing = 1.
     dt = .01
     ls = Float64[]
@@ -59,10 +59,10 @@ end
 
 sample(s::UniformSampler, dim=1) = [rand(dim) * (s.max-s.min) .+ s.min for i in 1:s.n]
 
-converging() = Isokann(poweriter=1000, learniter=100, nmc=100, forcing=1, opt=Adam(0.001), model=fluxnet([1,3,3,1], false), dt=.01)
+converging() = Isokann(poweriter=1000, learniter=100, nmc=100, forcing=1, opt=Adam(0.001), model=fluxnet1([1,3,3,1], false), dt=.01)
 happy1() = Isokann(nx=30, poweriter=100, learniter=100, nmc=3, forcing=1., opt= Adam(0.01), dt=0.01)
-basic2d() = Isokann(model=fluxnet([2,5,5,1]), potential=triplewell)
-better2d() = Isokann(model=fluxnet([2,5,5,5,1]), potential=triplewell, forcing=1, dt=0.001)
+basic2d() = Isokann(model=fluxnet1([2,5,5,1]), potential=triplewell)
+better2d() = Isokann(model=fluxnet1([2,5,5,5,1]), potential=triplewell, forcing=1, dt=0.001)
 
 function run(iso::AIsokann; liveplot=0, humboldt=true, hotfixbnd=false)
     (;nx, nmc, poweriter, learniter, opt, model, forcing, dt, ls, stds) = iso

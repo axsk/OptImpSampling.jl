@@ -4,13 +4,16 @@ import StatsBase
 
 
 
-# @time isokann(Doublewell) == 1sec
+#@assert @elapsed isokann(Doublewell()) < 2
 
 fluxnet(dynamics::AbstractLangevin, layers=[5,5]) = fluxnet([dim(dynamics); layers; 1])
 
+# 10-3 in about 30s
+#isokann(Doublewell(), sec=3, poweriter=100000, learniter=100, opt=Flux.Adam(0.001), dt=0.001, nx=10, nkoop=10, keepedges=true);
+
 function isokann(dynamics; model=fluxnet(dynamics),
                  nx=10, nkoop=10, poweriter=100, learniter=10, dt=0.01, alg=SROCK2(),
-                 opt=Flux.Adam(0.01),
+                 opt=Flux.Adam(0.01), keepedges=true,
                  sec=Inf, cb=Flux.throttle(plot_callback,sec,leading=false, trailing=true))
 
     xs = randx0(dynamics, nx)
@@ -54,7 +57,7 @@ function isokann(dynamics; model=fluxnet(dynamics),
         # resample xs uniformly along chi
         xys = hcat(xs, reshape(ys, size(xs, 1), :))
         cs = model(xys) |> vec
-        xs = humboldtsample(xys, cs, nx)
+        xs = humboldtsample(xys, cs, nx; keepedges)
         #xs = randx0(dynamics, nx)
     end
     return (;model, ls, S, sde, cde, xs, dynamics)

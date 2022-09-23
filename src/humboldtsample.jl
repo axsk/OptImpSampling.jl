@@ -22,8 +22,8 @@ function humboldtsample(xs, ocp, n, branch)
     return nxs[is]
 end
 
-function humboldtsample(xs::Array, ys::Vector, n)
-    i = subsample_uniformgrid(ys, n)
+function humboldtsample(xs::Array, ys::Vector, n; keepedges=true)
+    i = subsample_uniformgrid(ys, n; keepedges)
     return xs[:, i]
 end
 
@@ -31,8 +31,7 @@ end
 
 given a list of values `ys`, return `n`` indices `is` such that `ys[is]` are approximately uniform by
 picking the closest points to a randomly perturbed grid in [0,1]."
-function subsample_uniformgrid(ys, n, keepedges=true)
-
+function subsample_uniformgrid(ys, n; keepedges=true)
     keepedges && (n = n - 2)
     needles = (rand(n)  .+ (0:n-1)) ./ n
     keepedges && (needles = [[0,1]; needles])

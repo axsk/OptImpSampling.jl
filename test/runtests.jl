@@ -16,5 +16,5 @@ OptImpSampling.test_compare_controls()
 
 using OptImpSampling: isokann, Doublewell
 
-isokann(Doublewell())
-isokann(Doublewell(dim=2))
+@time isokann(Doublewell())
+@time isokann(Doublewell(dim=2))

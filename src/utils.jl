@@ -11,6 +11,12 @@ function fluxnet(layers=DEFAULT_LAYERS, act = Flux.sigmoid, lastact=act)
         Flux.Dense(layers[end-1], layers[end], lastact))
 end
 
+function fluxnet1(layers=DEFAULT_LAYERS, act = Flux.sigmoid, lastact=act)
+    Flux.Chain(
+        [Flux.Dense(layers[i], layers[i+1], act) for i in 1:length(layers)-2]...,
+        Flux.Dense(layers[end-1], layers[end], lastact), first)
+end
+
 # we use this to create a copy which uses StaticArrays, for faster d/dx gradients
 statify(x::Any) = x
 statify(c::Flux.Chain) = Flux.Chain(map(statify, c.layers)...)

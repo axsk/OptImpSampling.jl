@@ -120,7 +120,7 @@ u* = -σᵀ∇Φ = σᵀ∇log(Kχ) "
 function optcontrol(chi::F, S::Shiftscale, T, sigma) where F
     function u(x,t)
         #x = SVector{length(x)}(x)
-        dlogz = fgrad(x) do x
+        dlogz = ForwardDiff.gradient(x) do x
             lambda = exp(S.q*(T-t))
             Z = lambda * first(chi(x)) + S.a*(1-lambda)
             log(Z)
