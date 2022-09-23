@@ -53,7 +53,7 @@ function Lux.gradient(loss, (model,ps,st)::StatefulModel, x)
 end
 
 # TODO: this needs testing before we open a PR to Lux
-function pullback(dy, (model,ps,st)::StatefulModel, x)
+function Zygote.pullback(dy, (model,ps,st)::StatefulModel, x)
     u(p) = Lux.apply(model, x, p, st)[1]
     y, back = Lux.pullback(u, Lux.ComponentArray(ps))
     back(dy)[1]
@@ -61,3 +61,22 @@ end
 
 
 # SIMPLECHAINS: thought about it, but they dont provide derivatives wrt. x
+# edit: they should work
+import SimpleChains
+using SimpleChains: SimpleChain, TurboDense, init_params, static
+
+SCModel = Tuple{<:SimpleChain, <:Any}
+
+function scnet(layers=DEFAULT_LAYERS, act = SimpleChains.σ, lastact=act)
+    schain = SimpleChain(static(layers[1]),
+        (TurboDense(act, layers[i]) for i in 2:length(layers)-1)...,
+        TurboDense(lastact, layers[end]))
+    ps = init_params(schain)
+    return (schain, ps)
+end
+
+function gradient(f, (model,ps)::SCModel, x)
+    Zygote.gradient(ps) do ps
+        f(model(x, ps))
+    end[1]
+end

@@ -75,7 +75,7 @@ for Z = Kχᵢ if Kχ = exp(Qt) χ.
 Given it terms of the known generator Q"
 function optcontrol(chis, Q, T, sigma, i)
     function u(x,t)
-        dlogz = Zygote.gradient(x) do x
+        dlogz = Zygote.gradient(x) do x  # this should prob. be ForwardDiff
             Z = exp(Q*(T-t)) * chis(x)
             log(Z[i])
         end

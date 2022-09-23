@@ -21,7 +21,7 @@ end
 doublewell(x) = ((x[1])^2 - 1) ^ 2
 
 defproblem() = (
-    b = x->-gradient(doublewell,x)[1],
+    b = x->-gradient(doublewell,x)[1],  # TODO: should prob be ForwardDiff
     sigma = 0.6,
     n = 2000,
     h = 1/20,
@@ -61,7 +61,7 @@ function forwardbackward(x0; b, sigma, n, h, V, f, g)
     Z = similar(X)
     for i in 1:length(X)
         t = i / length(X) # reparametrize time to [0,1] for easier learning
-        dV = gradient(x->V([t; x])[1], X[i])[1]
+        dV = gradient(x->V([t; x])[1], X[i])[1]  # TODO: should be ForwardDiff
         if any(isnan.(dV))
             @show X, dV
             error()
@@ -146,7 +146,7 @@ end
 function estimator(x0; b, V, sigma, n, h, f, g, _...)
     # TODO: we work with fixed time here
     tmid = n * h / 2
-    u(x) = -sigma * gradient(x->V([tmid; x])[1], x)[1]
+    u(x) = -sigma * gradient(x->V([tmid; x])[1], x)[1]  # TODO: should be ForwardDiff
 
     bu(x) = b(x) + u(x)
     x, noise = eulermaruyama([-1.], bu, sigma, n, h)

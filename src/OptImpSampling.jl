@@ -4,6 +4,7 @@ include("utils.jl")
 
 include("langevin.jl")
 include("control.jl")
+include("dynamics.jl")
 
 include("humboldtsample.jl")
 include("isonew.jl")
