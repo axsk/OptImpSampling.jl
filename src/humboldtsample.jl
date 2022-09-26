@@ -22,7 +22,7 @@ function humboldtsample(xs, ocp, n, branch)
     return nxs[is]
 end
 
-function humboldtsample(xs::Array, ys::Vector, n; keepedges=true)
+function humboldtsample(xs::Array, ys::AbstractVector, n; keepedges=true)
     i = subsample_uniformgrid(ys, n; keepedges)
     return xs[:, i]
 end

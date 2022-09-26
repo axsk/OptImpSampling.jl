@@ -1,7 +1,7 @@
 # cleaner and simpler reimplementation of ISOKANN (1)
 import Flux
 import StatsBase
-
+import Optimisers
 
 
 #@assert @elapsed isokann(Doublewell()) < 2
@@ -13,13 +13,13 @@ fluxnet(dynamics::AbstractLangevin, layers=[5,5]) = fluxnet([dim(dynamics); laye
 
 function isokann(dynamics; model=fluxnet(dynamics),
                  nx=10, nkoop=10, poweriter=100, learniter=10, dt=0.01, alg=SROCK2(),
-                 opt=Flux.Adam(0.01), keepedges=true,
+                 opt=Optimisers.Adam(0.01), keepedges=true,
                  sec=Inf, cb=Flux.throttle(plot_callback,sec,leading=false, trailing=true))
 
     xs = randx0(dynamics, nx)
     sde = SDEProblem(dynamics, dt = dt, alg=alg)
 
-    ps = Flux.params(model)
+    opt = Optimisers.setup(opt, model)
     stds = Float64[]
     ls = Float64[]
     local S, cde
@@ -42,9 +42,10 @@ function isokann(dynamics; model=fluxnet(dynamics),
 
         # train network
         for _ in 1:learniter
-            loss() = mean(abs2, (model(xs)|>vec) .- target)
-            l, grad = Flux.withgradient(loss, ps)
-            Flux.update!(opt, ps, grad)
+            l, grad = Zygote.withgradient(model) do model
+                mean(abs2, (model(xs)|>vec) .- target)
+            end
+            Optimisers.update!(opt, model, grad[1])
             push!(ls, l)
             push!(stds, mean(std))
         end
@@ -67,7 +68,8 @@ function plot_callback(; kwargs...)
     (;losses, model, xs, target, std, stds) = NamedTuple(kwargs)
 
     let sqrloss = sqrt(losses[end]), std=stds[end]
-        @show sqrloss, std
+        #@show sqrloss, std
+        #@show log10(std)
     end
 
     p1=plot(yaxis=:log, title="loss", legend=:bottomleft)

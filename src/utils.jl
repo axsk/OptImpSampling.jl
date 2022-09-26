@@ -1,5 +1,6 @@
 import Flux
 import Lux
+import Zygote
 
 DEFAULT_LAYERS = [1,3,3,1]
 
@@ -31,6 +32,7 @@ end
 
 ### LUX
 
+
 # multi layer perceptron for the force
 function luxnet(layers=DEFAULT_LAYERS, act = Lux.sigmoid, lastact=act)
     model = Lux.Chain(
@@ -45,23 +47,7 @@ end
 StatefulModel = Tuple{<:Lux.AbstractExplicitLayer, <:Any, <:NamedTuple}
 ((mod,ps,st)::StatefulModel)(x) = mod(x,ps,st)[1]
 
-# I believe this is the natural way to interpret the gradient of a loss wrt the model
-function Lux.gradient(loss, (model,ps,st)::StatefulModel, x)
-    Lux.gradient(ps |> Lux.ComponentArray) do ps
-        loss(model(x,ps,st)[1])
-    end[1]
-end
 
-# TODO: this needs testing before we open a PR to Lux
-function Zygote.pullback(dy, (model,ps,st)::StatefulModel, x)
-    u(p) = Lux.apply(model, x, p, st)[1]
-    y, back = Lux.pullback(u, Lux.ComponentArray(ps))
-    back(dy)[1]
-end
-
-
-# SIMPLECHAINS: thought about it, but they dont provide derivatives wrt. x
-# edit: they should work
 import SimpleChains
 using SimpleChains: SimpleChain, TurboDense, init_params, static
 
@@ -75,8 +61,69 @@ function scnet(layers=DEFAULT_LAYERS, act = SimpleChains.σ, lastact=act)
     return (schain, ps)
 end
 
+function ((schain, ps)::SCModel)(x)
+    s = size(x)
+    if length(s) > 2
+        x = reshape(x, s[1], :)
+        r = schain(x, ps)
+        reshape(r, s...)
+    else
+        schain(x, ps)
+    end
+end
+
+## gradient implementations/hotfixes
+## not needed since Zygote handles them just fine
+
+
+#=
+# I believe this is the natural way to interpret the gradient of a loss wrt the model
+function Zygote.gradient(loss, (model,ps,st)::StatefulModel, x)
+    Lux.gradient(ps |> Lux.ComponentArray) do ps
+        loss(model(x,ps,st)[1])
+    end[1]
+end
+
+# TODO: this needs testing before we open a PR to Lux
+function Zygote.pullback(dy, (model,ps,st)::StatefulModel, x)
+    u(p) = Lux.apply(model, x, p, st)[1]
+    y, back = Lux.pullback(u, Lux.ComponentArray(ps))
+    back(dy)[1]
+end
+
+
+# This is conforming to the default Zygote.gradient/withgradient(m->loss(m(x)), model)
+function Zygote.withgradient(f, (model,ps,st)::StatefulModel)
+    Zygote.withgradient(ps) do
+        mod(x) = model(x, ps, st)[1]
+        @show mod([1.])
+        f(mod)
+    end
+end
+
+=#
+#=
 function gradient(f, (model,ps)::SCModel, x)
     Zygote.gradient(ps) do ps
         f(model(x, ps))
     end[1]
 end
+=#
+
+#= still invoked runtime dispatch, disabling this
+# this worked out of the box, but only with runtime inference, try this now
+function Zygote.withgradient(f, (schain,ps)::SCModel)
+    Zygote.withgradient(ps) do ps
+        f(x->(schain,ps)(x))
+    end
+end
+
+function Optimisers.update(opt, (model,ps)::SCModel, grad)
+    opt, psn = Optimisers.update(opt, ps, grad)
+    return opt, (model, psn)
+end
+
+function Optimisers.setup(opt, (model,ps)::SCModel)
+    Optimisers.setup(opt, ps)
+end
+=#
