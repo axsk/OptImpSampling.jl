@@ -22,7 +22,7 @@ function humboldtsample(xs, ocp, n, branch)
     return nxs[is]
 end
 
-function humboldtsample(xs::Array, ys::AbstractVector, n; keepedges=true)
+function humboldtsample(xs, ys::AbstractVector, n; keepedges=true)
     i = subsample_uniformgrid(ys, n; keepedges)
     return xs[:, i]
 end
@@ -45,7 +45,7 @@ Return the indices into haystack which lie closest to `needles` without duplicat
 by removing haystack candidates after a match.
 Note that this is not invariant under pertubations of needles"
 function pickclosest(haystack::AbstractVector, needles::AbstractVector)
-    picks = []
+    picks = Int[]
     for needle in needles
         inds = sortperm(norm.(haystack .- needle))
         for i in inds

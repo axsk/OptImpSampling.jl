@@ -26,12 +26,12 @@ doublewell(x) = ((x[1])^2 - 1) ^ 2
 potential(::Doublewell, x) = doublewell(x)
 sigma(l::Doublewell, x) = l.σ
 dim(l::Doublewell) = l.dim
-support(l::Doublewell) = repeat([-1.5 1.5], outer=[dim(l)])
+support(l::Doublewell) = repeat([-1.5 1.5], outer=[dim(l)]) :: Matrix{Float64}
 
 function randx0(l::Doublewell)
     s = support(l)
-    rand(size(s, 1)) .* (s[:,2] .- s[:,1]) .+ s[:,1]
+    x0 = rand(size(s, 1)) .* (s[:,2] .- s[:,1]) .+ s[:,1]
+    return x0
 end
 
-#randx0(l::Doublewell, n) = mapslices(x->randx0(l), (1:n)', dims=1)
-randx0(l::Doublewell, n) = mapreduce(x->randx0(l), hcat, 1:n)
+randx0(l::Doublewell, n) = reduce(hcat, [randx0(l) for i in 1:n])

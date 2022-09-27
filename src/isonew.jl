@@ -11,10 +11,11 @@ fluxnet(dynamics::AbstractLangevin, layers=[5,5]) = fluxnet([dim(dynamics); laye
 # 10-3 in about 30s
 #isokann(Doublewell(), sec=3, poweriter=100000, learniter=100, opt=Flux.Adam(0.001), dt=0.001, nx=10, nkoop=10, keepedges=true);
 
-function isokann(dynamics; model=fluxnet(dynamics),
-                 nx=10, nkoop=10, poweriter=100, learniter=10, dt=0.01, alg=SROCK2(),
-                 opt=Optimisers.Adam(0.01), keepedges=true,
-                 sec=Inf, cb=Flux.throttle(plot_callback,sec,leading=false, trailing=true))
+function isokann(;dynamics=Doublewell(), model=fluxnet(),
+                 nx::Int=10, nkoop::Int=10, poweriter::Int=100, learniter::Int=10, dt::Float64=0.01, alg=SROCK2(),
+                 opt=Optimisers.Adam(0.01), keepedges::Bool=true,
+                 sec=Inf, cb=Flux.throttle(plot_callback,sec,leading=false, trailing=true)
+                 )
 
     xs = randx0(dynamics, nx)
     sde = SDEProblem(dynamics, dt = dt, alg=alg)
@@ -30,10 +31,9 @@ function isokann(dynamics; model=fluxnet(dynamics),
         cde = GirsanovSDE(sde, control)
 
         # evaluate koopman
-        ys, ws = girsanovbatch(cde, xs, nkoop)
+        ys, ws = girsanovbatch(cde, xs, nkoop) :: Tuple{Array{Float64, 3},  Array{Float64, 2}}
         cs = model(ys)
         ks, std = vec.(StatsBase.mean_and_std(cs[1,:,:].*ws, 2))
-        #ks = mean(cs[1,:,:] .* ws, dims=2) |> vec
 
         # estimate shift scale
         S = Shiftscale(ks)
@@ -42,8 +42,10 @@ function isokann(dynamics; model=fluxnet(dynamics),
 
         # train network
         for _ in 1:learniter
-            l, grad = Zygote.withgradient(model) do model
-                mean(abs2, (model(xs)|>vec) .- target)
+            l, grad = let xs=xs  # this let allows xs to not be boxed
+                Zygote.withgradient(model) do model
+                    sum(abs2, (model(xs)|>vec) .- target) / length(target)
+                end
             end
             Optimisers.update!(opt, model, grad[1])
             push!(ls, l)

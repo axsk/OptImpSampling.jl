@@ -2,7 +2,7 @@ import Flux
 import Lux
 import Zygote
 
-DEFAULT_LAYERS = [1,3,3,1]
+const DEFAULT_LAYERS = [1,3,3,1]
 
 
 ### FLUX
@@ -18,6 +18,7 @@ function fluxnet1(layers=DEFAULT_LAYERS, act = Flux.sigmoid, lastact=act)
         Flux.Dense(layers[end-1], layers[end], lastact), first)
 end
 
+# TODO: statify is not typestable
 # we use this to create a copy which uses StaticArrays, for faster d/dx gradients
 statify(x::Any) = x
 statify(c::Flux.Chain) = Flux.Chain(map(statify, c.layers)...)

@@ -32,10 +32,10 @@ function controlled_noise(D, xx, p, t, ::Val{n}, g::G, u::U) where {n,G,U}
 end
 
 # specialize on the dimension of the problem for SVector
-GirsanovSDE(sde, u) = GirsanovSDE(sde, u, Val(length(sde.u0)))
+GirsanovSDE(sde, u::F) where F = GirsanovSDE(sde, u, Val(length(sde.u0)))
 
 """ Construct the SDE problem for Girsanov with control u """
-function GirsanovSDE(sde, u, ::Val{n}) where {n}
+function GirsanovSDE(sde, u::U, ::Val{n}) where {n, U}
     nrp = zeros(n+1, n+1)  # we could do with (n+1,n) but SROCK2 only takes square noise
     u0 = vcat(sde.u0, 0)   # append the girsanov dimension
 
@@ -54,14 +54,14 @@ function girsanovsample(cde, x0)
     sol=solve(cde; u0=u0)
     x = sol[end][1:end-1]
     w = exp(-sol[end][end])
-    return x, w
+    return x::Vector{Float64}, w::Float64
 end
 
 # TODO: maybe use DiffEq MC interface
 function girsanovbatch(cde, xs, n)
     dim, nx = size(xs)
-    ys = zeros(dim, nx, n)
-    ws = zeros(nx, n)
+    ys ::Array{Float64, 3} = zeros(dim, nx, n)
+    ws ::Array{Float64, 2} = zeros(nx, n)
     @floop for i in 1:nx, j in 1:n  # using @floop allows threaded iteration over i AND j
             ys[:, i, j], ws[i, j] = girsanovsample(cde, xs[:, i])
     end
