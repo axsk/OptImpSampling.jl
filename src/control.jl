@@ -39,10 +39,16 @@ function GirsanovSDE(sde, u::U, ::Val{n}) where {n, U}
     nrp = zeros(n+1, n+1)  # we could do with (n+1,n) but SROCK2 only takes square noise
     u0 = vcat(sde.u0, 0)   # append the girsanov dimension
 
+    try
+        u(sde.u0, 0)
+    catch
+        error("control `u` has wrong signature")
+    end
+
     drift(D,x,p,t) = controlled_drift(D,x,p,t, Val(n), sde.f, sde.g, u)
     noise(D,x,p,t) = controlled_noise(D,x,p,t, Val(n), sde.g, u)
 
-    return StochasticDiffEq.SDEProblem(drift, noise, u0, sde.tspan, sde.p;
+    return StochasticDiffEq.SDEProblem(drift, noise, u0, sde.tspan, sde.p; noise=sde.noise,
         noise_rate_prototype = nrp, sde.kwargs...)
 end
 

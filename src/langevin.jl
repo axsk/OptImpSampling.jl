@@ -1,14 +1,15 @@
 using Parameters
 using StochasticDiffEq
+import StochasticDiffEq: SDEProblem
 import ForwardDiff
 
 abstract type AbstractLangevin end
 # interface methods: potential(l), sigma(l), dim(l)
 
-function SDEProblem(l::AbstractLangevin, x0=randx0(l), T=1; dt=.01, alg=SROCK2())
+function SDEProblem(l::AbstractLangevin, x0=randx0(l), T=1; dt=.01, alg=SROCK2(), kwargs...)
     drift(x,p,t) = force(l, x)
     noise(x,p,t) = sigma(l, x)
-    StochasticDiffEq.SDEProblem(drift, noise, x0, T, alg=alg, dt=dt)
+    StochasticDiffEq.SDEProblem(drift, noise, x0, T, alg=alg, dt=dt; kwargs...)
 end
 
 function force(l::AbstractLangevin, x)

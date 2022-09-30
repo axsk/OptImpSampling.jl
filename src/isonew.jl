@@ -6,12 +6,12 @@ import Optimisers
 
 #@assert @elapsed isokann(Doublewell()) < 2
 
-fluxnet(dynamics::AbstractLangevin, layers=[5,5]) = fluxnet([dim(dynamics); layers; 1])
+defaultmodel(dynamics::AbstractLangevin, layers=[5,5]) = fluxnet([dim(dynamics); layers; 1])
 
 # 10-3 in about 30s
 #isokann(Doublewell(), sec=3, poweriter=100000, learniter=100, opt=Flux.Adam(0.001), dt=0.001, nx=10, nkoop=10, keepedges=true);
 
-function isokann(;dynamics=Doublewell(), model=fluxnet(),
+function isokann(;dynamics=Doublewell(), model=defaultmodel(dynamics),
                  nx::Int=10, nkoop::Int=10, poweriter::Int=100, learniter::Int=10, dt::Float64=0.01, alg=SROCK2(),
                  opt=Optimisers.Adam(0.01), keepedges::Bool=true,
                  sec=Inf, cb=Flux.throttle(plot_callback,sec,leading=false, trailing=true)
