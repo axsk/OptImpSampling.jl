@@ -6,9 +6,9 @@ function controlled_drift(D, xx, p, t, ::Val{n}, f::F, g::G, u::U) where {n,F,G,
     ux = u(x,t)
     gx = g(x,p,t)
     if isa(gx, Matrix)
-        D[1:end-1] .= f(x,p,t) .+ g(x,p,t) * ux
+        D[1:end-1] .= f(x,p,t) .+ gx * ux
     else
-        D[1:end-1] .= f(x,p,t) .+ g(x,p,t) .* ux
+        D[1:end-1] .= f(x,p,t) .+ gx .* ux
     end
     D[end] = sum(abs2, ux) / 2
 end
@@ -50,6 +50,37 @@ function GirsanovSDE(sde, u::U, ::Val{n}) where {n, U}
 
     return StochasticDiffEq.SDEProblem(drift, noise, u0, sde.tspan, sde.p; noise=sde.noise,
         noise_rate_prototype = nrp, sde.kwargs...)
+end
+
+## TODO: where do we use this?
+function CompoundSDE(sde, u::U, v::Val{n} = Val(length(sde.u0))) where {n, U}
+    nrp = zeros(n+1, n+1)
+    u0 = vcat(sde.u0, 1.)
+
+    f = sde.f
+    g = sde.g
+
+    function drift(D, xx, p, t)
+        x = SVector{n}(@view xx[1:n])
+        ux = u(x,t)
+        gx = g(x,p,t)
+        D[1:end-1] .= f(x,p,t) .+ gx .* ux
+        D[end] = - xx[end] * sum(abs2, ux) / 2
+    end
+
+    function noise(D,xx,p,t)
+        x = SVector{n}(@view xx[1:n])
+        ux = u(x,t)
+        gx = g(x,p,t)
+        D .= 0
+        for i in 1:n
+            D[i,i] = gx
+        end
+        D[end, 1:end-1] .= -xx[end] * ux
+    end
+
+    return StochasticDiffEq.SDEProblem(drift, noise, u0, sde.tspan, sde.p;
+        noise=sde.noise, noise_rate_prototype = nrp, sde.kwargs...)
 end
 
 nocontrol(x, t) = zero(x)
