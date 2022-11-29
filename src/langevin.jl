@@ -16,23 +16,25 @@ function force(l::AbstractLangevin, x)
     - ForwardDiff.gradient(x->potential(l, x), x)
 end
 
-##
-@with_kw struct Doublewell <: AbstractLangevin
+##  Generic Diffusion in a potential
+@with_kw struct Diffusion{T} <: AbstractLangevin
+    potential::T
     dim::Int64=1
     σ::Float64=1.
 end
 
-doublewell(x) = ((x[1])^2 - 1) ^ 2
+potential(d::Diffusion, x) = d.potential(x)
+sigma(l::Diffusion, x) = l.σ
+dim(l::Diffusion) = l.dim
+support(l::Diffusion) = repeat([-1.5 1.5], outer=[dim(l)]) :: Matrix{Float64}
 
-potential(::Doublewell, x) = doublewell(x)
-sigma(l::Doublewell, x) = l.σ
-dim(l::Doublewell) = l.dim
-support(l::Doublewell) = repeat([-1.5 1.5], outer=[dim(l)]) :: Matrix{Float64}
-
-function randx0(l::Doublewell)
+randx0(l::Diffusion, n) = reduce(hcat, [randx0(l) for i in 1:n])
+function randx0(l::Diffusion)
     s = support(l)
     x0 = rand(size(s, 1)) .* (s[:,2] .- s[:,1]) .+ s[:,1]
     return x0
 end
 
-randx0(l::Doublewell, n) = reduce(hcat, [randx0(l) for i in 1:n])
+doublewell(x) = ((x[1])^2 - 1) ^ 2
+
+Doublewell(;kwargs...) = Diffusion(;potential=doublewell, kwargs...)

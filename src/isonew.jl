@@ -9,14 +9,14 @@ import Optimisers
 defaultmodel(dynamics::AbstractLangevin, layers=[5,5]) = fluxnet([dim(dynamics); layers; 1])
 
 # 10-3 in about 30s
-#isokann(Doublewell(), sec=3, poweriter=100000, learniter=100, opt=Flux.Adam(0.001), dt=0.001, nx=10, nkoop=10, keepedges=true);
+#isokann(Doublewell(), throttle=3, poweriter=100000, learniter=100, opt=Optimisers.Adam(0.001), dt=0.001, nx=10, nkoop=10, keepedges=true);
 
 function isokann(;dynamics=Doublewell(), model=defaultmodel(dynamics),
                  nx::Int=10, nkoop::Int=10, poweriter::Int=100, learniter::Int=10, dt::Float64=0.01, alg=SROCK2(),
                  opt=Optimisers.Adam(0.01), keepedges::Bool=true,
                  throttle=1, callback = plot_callback,
-                 usecontrol=true,
-                 resample=:humboldt
+                 usecontrol::Bool=true,
+                 resample::Symbol=:humboldt
                  )
 
     callback_throttled = Flux.throttle(callback, throttle, leading=false, trailing=true)
@@ -30,8 +30,7 @@ function isokann(;dynamics=Doublewell(), model=defaultmodel(dynamics),
     local S, cde, target, std, cs
     control = nocontrol
 
-
-    for _ in 1:poweriter
+    for i in 1:poweriter
 
         cde = GirsanovSDE(sde, control)
 
@@ -57,8 +56,11 @@ function isokann(;dynamics=Doublewell(), model=defaultmodel(dynamics),
             push!(stds, mean(std))
         end
 
-        callback_throttled(;losses=ls, model, xs, target, stds, std, cs)
-        #plot_callback(;losses=ls, model, xs, target, stds, std, cs)
+        if i < poweriter
+            callback_throttled(;losses=ls, model, xs, target, stds, std, cs)
+        else
+            plot_callback(;losses=ls, model, xs, target, stds, std, cs)
+        end
 
         # update controls
         if usecontrol
@@ -117,4 +119,8 @@ end
 function batch_analysis(;nbatch = 10, kwargs...)
     rs = [OptImpSampling.isokann(throttle=Inf, resample=:rand, poweriter=100, learniter=100, nx=10, nkoop=10, usecontrol=true) for i in 1:nbatch]
     plot_mean_loss(rs)
+end
+
+function paperplot()
+    r =isokann(Doublewell(), sec=3, poweriter=100000, learniter=100, opt=Flux.Adam(0.001), dt=0.001, nx=10, nkoop=10, keepedges=true)
 end
