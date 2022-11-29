@@ -160,6 +160,10 @@ function optcontrol(chi::F, S::Shiftscale, T, sigma) where F
         dlogz = ForwardDiff.gradient(x) do x
             lambda = exp(S.q*(T-t))
             Z = lambda * first(chi(x)) + S.a*(1-lambda)
+            if Z < 0
+                @warn("negative log in control encountered")
+                return 0.
+            end
             log(Z)
         end #:: Vector{Float64}  # TODO: this should be inferred!
         return sigma' * dlogz

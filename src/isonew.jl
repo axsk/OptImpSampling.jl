@@ -14,8 +14,12 @@ defaultmodel(dynamics::AbstractLangevin, layers=[5,5]) = fluxnet([dim(dynamics);
 function isokann(;dynamics=Doublewell(), model=defaultmodel(dynamics),
                  nx::Int=10, nkoop::Int=10, poweriter::Int=100, learniter::Int=10, dt::Float64=0.01, alg=SROCK2(),
                  opt=Optimisers.Adam(0.01), keepedges::Bool=true,
-                 sec=Inf, cb=Flux.throttle(plot_callback,sec,leading=false, trailing=true)
+                 throttle=1, callback = plot_callback,
+                 usecontrol=true,
+                 resample=:humboldt
                  )
+
+    callback_throttled = Flux.throttle(callback, throttle, leading=false, trailing=true)
 
     xs = randx0(dynamics, nx)
     sde = SDEProblem(dynamics, dt = dt, alg=alg)
@@ -23,8 +27,9 @@ function isokann(;dynamics=Doublewell(), model=defaultmodel(dynamics),
     opt = Optimisers.setup(opt, model)
     stds = Float64[]
     ls = Float64[]
-    local S, cde
+    local S, cde, target, std, cs
     control = nocontrol
+
 
     for _ in 1:poweriter
 
@@ -52,44 +57,64 @@ function isokann(;dynamics=Doublewell(), model=defaultmodel(dynamics),
             push!(stds, mean(std))
         end
 
-        cb(;losses=ls, model, xs, target, stds, std, cs)
+        callback_throttled(;losses=ls, model, xs, target, stds, std, cs)
+        #plot_callback(;losses=ls, model, xs, target, stds, std, cs)
 
         # update controls
-        control = optcontrol(statify(model), S, sde)
+        if usecontrol
+            control = optcontrol(statify(model), S, sde)
+        end
 
         # resample xs uniformly along chi
-        xys = hcat(xs, reshape(ys, size(xs, 1), :))
-        cs = model(xys) |> vec
-        xs = humboldtsample(xys, cs, nx; keepedges)
-        #xs = randx0(dynamics, nx)
+        if resample == :humboldt
+            xys = hcat(xs, reshape(ys, size(xs, 1), :))
+            cs = model(xys) |> vec
+            xs = humboldtsample(xys, cs, nx; keepedges)
+        elseif resample == :rand
+            xs = randx0(dynamics, nx)
+        elseif resample == :nothing
+        else
+            error("resample choice ($resample) is not defined")
+        end
     end
-    return (;model, ls, S, sde, cde, xs, dynamics)
+    return (;model, ls, S, sde, cde, xs, dynamics, target, stds, std, cs)
 end
 
 function plot_callback(; kwargs...)
     (;losses, model, xs, target, std, stds) = NamedTuple(kwargs)
 
-    let sqrloss = sqrt(losses[end]), std=stds[end]
-        #@show sqrloss, std
-        #@show log10(std)
-    end
-
-    p1=plot(yaxis=:log, title="loss", legend=:bottomleft)
-    plot!(p1, sqrt.(losses), label="loss")
-    plot!(p1, vec(stds), label="std")
-
-    if length(xs) > 0
-        if size(xs, 1) == 1
-            p2=plot(ylims=(-.1,1.1), title="fit",  legend=:best)
-            plot!(p2, x->model([x])[1], -3:.1:3, label="χ")
-            scatter!(p2, vec(xs), vec(target), yerror=vec(std), label="SKχ")
-        else
-            p2 = contour(-2:.1:2, -2:.1:2, (x,y)->model( [x,y])[1], fill=true, alpha=.1)
-            l = vec(mapslices(model, xs, dims=1)) - target
-            #xs = reduce(hcat, xs)'
-            scatter!(p2, xs[:,1], xs[:,2], markersize=l.^2 * 100)
-        end
-    end
-
+    p1 = plot_loss(losses, stds)
+    p2 = plot_fit(model, xs, target, std)
     plot(p1, p2) |> display
+end
+
+function plot_loss(losses, stds)
+    p=plot(yaxis=:log, title="loss", legend=:bottomleft)
+    plot!(p, sqrt.(losses), label="loss")
+    plot!(p, vec(stds), label="std")
+    return p
+end
+
+function plot_fit(model, xs, target, std)
+    if size(xs, 1) == 1  # 1d case
+        p=plot(ylims=(-.1,1.1), title="fit",  legend=:best)
+        plot!(p, x->model([x])[1], -3:.1:3, label="χ")
+        scatter!(p, vec(xs), vec(target), yerror=vec(std), label="SKχ")
+    else
+        p = contour(-2:.1:2, -2:.1:2, (x,y)->model( [x,y])[1], fill=true, alpha=.1)
+        l = vec(mapslices(model, xs, dims=1)) - target
+        scatter!(p, xs[:,1], xs[:,2], markersize=l.^2 * 100)
+    end
+    return p
+end
+
+function plot_mean_loss(rs)
+    losses = StatsBase.mean(reduce(hcat, [r.ls  for r in rs]), dims=2)
+    stds   = StatsBase.mean(reduce(hcat, [r.stds for r in rs]), dims=2)
+    plot_loss(losses, stds)
+end
+
+function batch_analysis(;nbatch = 10, kwargs...)
+    rs = [OptImpSampling.isokann(throttle=Inf, resample=:rand, poweriter=100, learniter=100, nx=10, nkoop=10, usecontrol=true) for i in 1:nbatch]
+    plot_mean_loss(rs)
 end
