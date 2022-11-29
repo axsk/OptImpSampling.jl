@@ -6,6 +6,7 @@ given a list of points `xs`, propagate each into `branch` trajectories according
 and subsamble `n` of the resulting points uniformly over their chi value.
 Returns a list of approximately equi-chi-distant start points"
 function humboldtsample(xs, ocp, n, branch)
+     # this is only used in old isokann.jl
     ocp = deepcopy(ocp)
     ocp.forcing = 0.
     nxs = copy(xs)
@@ -23,6 +24,7 @@ function humboldtsample(xs, ocp, n, branch)
 end
 
 function humboldtsample(xs, ys::AbstractVector, n; keepedges=true)
+    # this is used from isonew.jl
     i = subsample_uniformgrid(ys, n; keepedges)
     return xs[:, i]
 end
