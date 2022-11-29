@@ -1,4 +1,5 @@
 using FLoops: @floop
+using StaticArrays
 
 # b + σu
 function controlled_drift(D, xx, p, t, ::Val{n}, f::F, g::G, u::U) where {n,F,G,U}

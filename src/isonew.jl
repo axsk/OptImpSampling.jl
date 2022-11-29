@@ -2,6 +2,7 @@
 import Flux
 import StatsBase
 import Optimisers
+using Plots: plot, plot!, scatter!
 
 
 #@assert @elapsed isokann(Doublewell()) < 2
@@ -53,7 +54,7 @@ function isokann(;dynamics=Doublewell(), model=defaultmodel(dynamics),
             end
             Optimisers.update!(opt, model, grad[1])
             push!(ls, l)
-            push!(stds, mean(std))
+            push!(stds, StatsBase.mean(std))
         end
 
         if i < poweriter

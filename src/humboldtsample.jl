@@ -1,4 +1,4 @@
-
+using LinearAlgebra: norm
 "
 humboldtsample(xs, ocp, n, branch)
 

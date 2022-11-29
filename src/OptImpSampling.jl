@@ -8,6 +8,8 @@ include("control.jl")   # opt control
 include("humboldtsample.jl")  # adaptive sampling
 include("isonew.jl")    # new implementation of isokann
 
+export isokann
+
 
 #include("sqra.jl")     # copy from Sqra.jl for reference solution
 #include("ociso.jl")    # old opt control
