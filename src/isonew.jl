@@ -79,7 +79,7 @@ function isokann(;dynamics=Doublewell(), model=defaultmodel(dynamics),
             error("resample choice ($resample) is not defined")
         end
     end
-    return (;model, ls, S, sde, cde, xs, dynamics, target, stds, std, cs)
+    return (;model, ls, S, sde, cde, xs, dynamics, target, stds, std, cs, opt)
 end
 
 function plot_callback(; kwargs...)
@@ -121,6 +121,16 @@ function batch_analysis(;nbatch = 10, kwargs...)
     plot_mean_loss(rs)
 end
 
-function paperplot()
-    r =isokann(Doublewell(), sec=3, poweriter=100000, learniter=100, opt=Flux.Adam(0.001), dt=0.001, nx=10, nkoop=10, keepedges=true)
+function paperplot(;kwargs...)
+    r=isokann(
+        dynamics=Doublewell(),
+        nx=30,
+        nkoop=10,
+        poweriter=100,
+        learniter=100,
+        opt=Optimisers.Adam(0.001),
+        dt=0.01,
+        model=fluxnet([1,5,5,1]),
+        keepedges=true,
+        ; kwargs...)
 end
