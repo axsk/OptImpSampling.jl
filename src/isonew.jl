@@ -2,8 +2,9 @@
 import Flux
 import StatsBase
 import Optimisers
-using Plots: plot, plot!, scatter!
-
+import Plots
+using Plots: plot, plot!, scatter!, savefig
+using Random
 
 #@assert @elapsed isokann(Doublewell()) < 2
 
@@ -20,7 +21,7 @@ function isokann(;dynamics=Doublewell(), model=defaultmodel(dynamics),
                  resample::Symbol=:humboldt
                  )
 
-    callback_throttled = Flux.throttle(callback, throttle, leading=false, trailing=true)
+    callback_throttled = Flux.throttle(callback, throttle, leading=true, trailing=false)
 
     xs = randx0(dynamics, nx)
     sde = SDEProblem(dynamics, dt = dt, alg=alg)
@@ -61,6 +62,7 @@ function isokann(;dynamics=Doublewell(), model=defaultmodel(dynamics),
             callback_throttled(;losses=ls, model, xs, target, stds, std, cs)
         else
             plot_callback(;losses=ls, model, xs, target, stds, std, cs)
+            break
         end
 
         # update controls
@@ -89,12 +91,13 @@ function plot_callback(; kwargs...)
     p1 = plot_loss(losses, stds)
     p2 = plot_fit(model, xs, target, std)
     plot(p1, p2) |> display
+    return p1,p2
 end
 
 function plot_loss(losses, stds)
     p=plot(yaxis=:log, title="loss", legend=:bottomleft)
-    plot!(p, sqrt.(losses), label="loss")
-    plot!(p, vec(stds), label="std")
+    plot!(p, sqrt.(losses), label="RMSE")
+    plot!(p, vec(stds), label="MSTD")
     return p
 end
 
@@ -122,16 +125,35 @@ function batch_analysis(;nbatch = 10, kwargs...)
     plot_mean_loss(rs)
 end
 
-function paperplot(;kwargs...)
-    r=isokann(
-        dynamics=Doublewell(),
-        nx=30,
-        nkoop=10,
-        poweriter=100,
-        learniter=100,
-        opt=Optimisers.Adam(0.001),
-        dt=0.01,
-        model=fluxnet([1,5,5,1]),
-        keepedges=true,
-        ; kwargs...)
+function paperplot(;seed=1, kwargs...)
+
+    for controlled in [true, false]
+        Random.seed!(seed)
+        poweriter = 50
+        learniter = 500
+        r=isokann(
+            dynamics=Doublewell(),
+            nx=30,
+            nkoop=20,
+            poweriter=poweriter,
+            learniter=learniter,
+            opt=Optimisers.Adam(0.001),
+            dt=0.001,
+            model=fluxnet([1,5,5,1]),
+            keepedges=true,
+            usecontrol=controlled
+            ; kwargs...)
+
+        p1,p2 = plot_callback(;losses=r.ls, r...)
+        @show log10(sqrt(r.ls[end]))
+        Plots.ylims!(p1, 10^(-3.0),0.8)
+        Plots.plot!(size=(300*1.6,300), title="")
+        Plots.xticks!((0:10:poweriter)*learniter, string.(0:10:poweriter))
+        Plots.ylims!(p2, -.03, 1.03)
+        Plots.plot!(size=(300*1.6,300), title="")
+        display(p1)
+        display(p2)
+        savefig(p1, "plots/loss-$controlled.png")
+        savefig(p2, "plots/fit-$controlled.png")
+    end
 end
