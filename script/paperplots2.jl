@@ -30,5 +30,5 @@ plot(grid, [chi1 chi2], labels=[L"\chi_1" L"\chi_2"], yticks=[-1,0,1,.5])
 plot!(grid, kchi, linestyle=:dash, alpha=.5, label=L"\mathbf{K}\chi_1")
 savefig("plots/chifun.png")
 
-scatter([chi1 v1], [chi2  v2], label=["χ" "v"], xticks=[0,1], yticks=[-1,1], xlabel="first component", ylabel="second component")
+scatter([v2 chi2], [v1 chi1], label=["v" "χ"], xticks=[-1,0,1], yticks=[0,1], xlabel="second component", ylabel="first component")
 savefig("plots/compscat.png")
