@@ -153,6 +153,7 @@ function paperplot(;seed=1, kwargs...)
         Plots.plot!(size=(300*1.6,300), title="", dpi=300)
         display(p1)
         display(p2)
+        mkpath("plots")
         savefig(p1, "plots/loss-$controlled.png")
         savefig(p2, "plots/fit-$controlled.png")
     end

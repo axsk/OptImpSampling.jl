@@ -2,6 +2,8 @@ using Plots
 using LaTeXStrings
 include("../src/sqra.jl")
 
+mkpath("plots")
+
 doublewell(x) = ((x[1])^2 - 1) ^ 2
 grid = -3:.05:3
 
